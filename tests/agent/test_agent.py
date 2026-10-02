@@ -1,22 +1,10 @@
 from support_ops.agent.agent import SupportAgent
-from support_ops.domain.ticket import (
-    AgentAction,
-    AgentDecision,
-    IncomingTicket,
-)
+from support_ops.domain.ticket import IncomingTicket
+
+from tests.agent.fakes import FakeLLM
 
 
-class FakeLLM:
-    def chat(self, message: str) -> str:
-        return """
-        {
-            "action": "create_ticket",
-            "reason": "The issue requires investigation."
-        }
-        """
-
-
-def test_agent_can_execute_create_ticket() -> None:
+def test_agent_decides_and_executes() -> None:
     agent = SupportAgent(FakeLLM())
 
     ticket = IncomingTicket(
@@ -26,10 +14,9 @@ def test_agent_can_execute_create_ticket() -> None:
         description="My account is locked.",
     )
 
-    decision = AgentDecision(
-        action=AgentAction.CREATE_TICKET,
-        reason="The issue requires investigation.",
-    )
+    decision = agent.decide(ticket)
+
+    assert decision.action.value == "create_ticket"
 
     result = agent.execute(ticket, decision)
 
