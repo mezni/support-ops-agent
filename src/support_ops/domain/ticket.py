@@ -47,3 +47,16 @@ class TicketClassification(BaseModel):
     category: TicketCategory
     priority: TicketPriority
     sentiment: str
+
+class AgentAction(StrEnum):
+    DRAFT_RESPONSE = "draft_response"
+    CREATE_TICKET = "create_ticket"
+    ESCALATE = "escalate"
+
+class AgentDecision(BaseModel):
+    action: AgentAction
+    reason: str
+
+class AgentActionResult(BaseModel):
+    success: bool
+    message: str
