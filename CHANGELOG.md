@@ -4,7 +4,7 @@
 
 | Version | Feature Domain | Key Objectives |
 |---|---|---|
-| 0.0.3 | Configuration & LLM Provider | Load `.env` from the project root regardless of working directory; fail fast on missing OpenRouter credentials; default to a zero-cost OpenRouter model |
+| 0.0.3 | Configuration, Packaging & LLM Provider | Make the project installable and importable from any directory; load `.env` from the project root; fail fast on missing OpenRouter credentials; default to a zero-cost OpenRouter model |
 | 0.0.2 | Planning & Scaffolding | Record the phased roadmap and initial project scaffold |
 | 0.0.1 | Project Foundation | Establish src-layout package, domain models, and agent control loop |
 | MVP v1 (pre-0.0.1) | MVP Prototype | Prove RAG, agent coordination, MCP, and workflow validation end to end |
@@ -20,8 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [0.0.3] - 2026-10-02
 
-This release hardens configuration loading so the project runs correctly from any
-working directory, and switches local development to a zero-cost OpenRouter model.
+This release makes the project properly installable, hardens configuration loading so
+it works from any working directory, and switches local development to a zero-cost
+OpenRouter model.
 
 ### Added
 
@@ -29,6 +30,11 @@ working directory, and switches local development to a zero-cost OpenRouter mode
   missing variables and the resolved `.env` path, instead of letting an empty value
   reach the OpenAI client as `Missing credentials`.
 - Version History table summarizing each release by feature domain and key objectives.
+- `[build-system]` using `hatchling`, plus `[tool.hatch.build.targets.wheel]` with
+  `packages = ["src/support_ops"]`, so uv installs the project as an editable package
+  instead of a dependency-only virtual project.
+- `[tool.pytest.ini_options]` with `testpaths = ["tests"]`.
+- `[tool.ruff]` with `src = ["src", "tests"]`.
 
 ### Changed
 
@@ -46,6 +52,16 @@ working directory, and switches local development to a zero-cost OpenRouter mode
 
 - Resolved `ValidationError` for `openrouter_api_key` / `openrouter_model` when the
   working directory was not the project root.
+- `ModuleNotFoundError: No module named 'support_ops'` during test collection and from
+  the project root. Without a build backend the package was never installed into the
+  venv, so imports only resolved when the working directory happened to be `src/`.
+
+### Known Issues
+
+- `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
+  `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
+  `tests/domain/test_ticket.py`, and an unused `result` local in
+  `src/support_ops/classifier.py`.
 
 ## [0.0.2] - 2026-10-01
 
