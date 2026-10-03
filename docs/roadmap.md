@@ -99,8 +99,11 @@ def test_basic_llm():
 ```python
 from pydantic import BaseModel, Field
 
+
 class TicketClassification(BaseModel):
-    category: str = Field(description="Ticket category: billing, technical, account, etc.")
+    category: str = Field(
+        description="Ticket category: billing, technical, account, etc."
+    )
     priority: str = Field(description="Ticket priority: low, medium, high, urgent")
     sentiment: str = Field(description="Sentiment: positive, neutral, negative")
     intent: str = Field(description="Primary intent of the ticket")
@@ -275,8 +278,13 @@ def test_rag_retrieval():
 
 ```python
 class AgentContext:
-    def __init__(self, ticket: Ticket, conversation: Conversation,
-                 retrieved_docs: List[Document], customer: Customer):
+    def __init__(
+        self,
+        ticket: Ticket,
+        conversation: Conversation,
+        retrieved_docs: List[Document],
+        customer: Customer,
+    ):
         self.ticket = ticket
         self.conversation = conversation
         self.retrieved_docs = retrieved_docs

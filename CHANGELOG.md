@@ -4,6 +4,7 @@
 
 | Version | Feature Domain | Key Objectives |
 |---|---|---|
+| 0.0.4 | Agent Domain & Documentation | Define the agent decision contract in the domain layer; document runtime behaviour with sequence diagrams |
 | 0.0.3 | Configuration, Packaging & LLM Provider | Make the project installable and importable from any directory; load `.env` from the project root; fail fast on missing OpenRouter credentials; default to a zero-cost OpenRouter model |
 | 0.0.2 | Planning & Scaffolding | Record the phased roadmap and initial project scaffold |
 | 0.0.1 | Project Foundation | Establish src-layout package, domain models, and agent control loop |
@@ -17,6 +18,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Project re-initialization complete.
 - Focus on implementing the phased roadmap starting from Phase 0.
+
+## [0.0.4] - 2026-10-02
+
+This release adds the missing agent decision types to the domain layer and documents
+the runtime with sequence diagrams.
+
+### Added
+
+- `AgentAction` (`StrEnum`) with `DRAFT_RESPONSE`, `CREATE_TICKET`, and `ESCALATE`,
+  matching the action strings requested by the agent prompt in `agent.py`.
+- `AgentDecision` (pydantic model) with `action: AgentAction` and `reason: str`.
+  Verified that `AgentDecision.model_validate` parses the raw model string
+  `"create_ticket"` into the enum and serializes back to JSON unchanged.
+- `docs/sequence-diagram.md`: Mermaid sequence diagrams for configuration resolution,
+  the inference path, agent tool dispatch, the unimplemented decision paths, and the
+  outstanding wiring gap, plus a per-module status table.
+
+### Fixed
+
+- `ImportError: cannot import name 'AgentAction'` raised during test collection of
+  `tests/agent/test_agent.py`. `agent.py` and the test both imported `AgentAction` and
+  `AgentDecision` from `support_ops.domain.ticket`, but neither type existed anywhere in
+  the repository, so the agent package could not be imported at all.
+
+### Known Issues
+
+- `SupportAgent.decide` (`agent.py:50`) and `TicketClassifier.classify`
+  (`classifier.py:39`) still raise `NotImplementedError` unconditionally. Both send a
+  prompt to the model and then discard the response. Only `SupportAgent.execute` is
+  functional, and the passing agent test bypasses `decide` entirely via `FakeLLM`, so
+  model-output parsing remains unverified.
+- Neither `SupportAgent` nor `TicketClassifier` is constructed by `main()`, and no
+  module outside their own tests imports them. The composition described in roadmap
+  Phase 3 and 4 does not exist yet.
+- The Mermaid diagrams are **unverified**. Rendering could not be validated locally
+  because `@mermaid-js/mermaid-cli` failed to install, so syntax has been hand-checked
+  only and should be confirmed in a Mermaid-capable viewer.
+- `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
+  `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
+  `tests/domain/test_ticket.py`, and an unused `result` local in
+  `src/support_ops/classifier.py`.
 
 ## [0.0.3] - 2026-10-02
 
@@ -55,13 +97,6 @@ OpenRouter model.
 - `ModuleNotFoundError: No module named 'support_ops'` during test collection and from
   the project root. Without a build backend the package was never installed into the
   venv, so imports only resolved when the working directory happened to be `src/`.
-
-### Known Issues
-
-- `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
-  `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
-  `tests/domain/test_ticket.py`, and an unused `result` local in
-  `src/support_ops/classifier.py`.
 
 ## [0.0.2] - 2026-10-01
 

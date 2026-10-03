@@ -36,6 +36,4 @@ Return JSON with exactly these fields:
         # Temporary implementation.
         # We will replace this with proper structured
         # output validation in the next iteration.
-        raise NotImplementedError(
-            "Structured LLM parsing will be implemented next."
-        )
+        raise NotImplementedError("Structured LLM parsing will be implemented next.")
