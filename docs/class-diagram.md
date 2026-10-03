@@ -489,8 +489,8 @@ after the tool registry refactor. It still exposes a `create_ticket` function, s
 these imports would succeed and return differently-shaped objects:
 
 ```python
-from support_ops.tools.base import ToolResult        # pydantic, has .data
-from support_ops.agent.tools import ToolResult       # dataclass, no .data
+from support_ops.tools.base import ToolResult  # pydantic, has .data
+from support_ops.agent.tools import ToolResult  # dataclass, no .data
 ```
 
 Deleting `agent/tools.py` would remove the ambiguity. It is kept in this diagram only
@@ -527,6 +527,7 @@ because it is a design change rather than a documentation fix.
 
 ```python
 T = TypeVar("T", bound=BaseModel)
+
 
 def structured(self, user_message: str, output_model: type[T]) -> T: ...
 ```

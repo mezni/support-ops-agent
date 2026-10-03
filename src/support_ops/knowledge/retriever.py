@@ -25,11 +25,7 @@ class KnowledgeRetriever:
         results: list[SearchResult] = []
 
         for document in self.store.all():
-            text = (
-                f"{document.title} "
-                f"{document.category} "
-                f"{document.content}"
-            ).lower()
+            text = (f"{document.title} {document.category} {document.content}").lower()
 
             document_words = set(text.split())
 

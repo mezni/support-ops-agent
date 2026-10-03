@@ -9,9 +9,7 @@ from tests.agent.fakes import FakeLLM
 
 
 def test_agent_decides_and_executes() -> None:
-    retriever = KnowledgeRetriever(
-        KnowledgeStore(default_documents())
-    )
+    retriever = KnowledgeRetriever(KnowledgeStore(default_documents()))
 
     agent = SupportAgent(
         llm=FakeLLM(),

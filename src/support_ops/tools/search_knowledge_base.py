@@ -5,9 +5,7 @@ from support_ops.tools.base import Tool, ToolResult
 
 
 class SearchKnowledgeBaseInput(BaseModel):
-    query: str = Field(
-        description="The question or issue to search for."
-    )
+    query: str = Field(description="The question or issue to search for.")
 
     limit: int = Field(
         default=3,

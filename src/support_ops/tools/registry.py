@@ -12,9 +12,7 @@ class ToolRegistry:
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
-            raise ValueError(
-                f"Tool already registered: {tool.name}"
-            )
+            raise ValueError(f"Tool already registered: {tool.name}")
 
         self._tools[tool.name] = tool
 
@@ -22,9 +20,7 @@ class ToolRegistry:
         try:
             return self._tools[name]
         except KeyError:
-            raise ValueError(
-                f"Unknown tool: {name}"
-            ) from None
+            raise ValueError(f"Unknown tool: {name}") from None
 
     def list(self) -> list[Tool]:
         return list(self._tools.values())
@@ -37,8 +33,6 @@ def create_default_registry(
     registry = ToolRegistry()
 
     registry.register(CreateTicketTool())
-    registry.register(
-        SearchKnowledgeBaseTool(retriever)
-    )
+    registry.register(SearchKnowledgeBaseTool(retriever))
 
     return registry

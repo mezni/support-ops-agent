@@ -13,15 +13,11 @@ def main() -> None:
 
     llm = LLMClient(settings)
 
-    store = KnowledgeStore(
-        default_documents()
-    )
+    store = KnowledgeStore(default_documents())
 
     retriever = KnowledgeRetriever(store)
 
-    tools = create_default_registry(
-        retriever
-    )
+    tools = create_default_registry(retriever)
 
     agent = SupportAgent(
         llm=llm,
@@ -32,9 +28,7 @@ def main() -> None:
         id="T-001",
         customer_id="C-001",
         subject="I was charged twice",
-        description=(
-            "I noticed two charges for my subscription."
-        ),
+        description=("I noticed two charges for my subscription."),
     )
 
     result = agent.run(ticket)
