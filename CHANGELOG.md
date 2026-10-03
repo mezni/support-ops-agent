@@ -4,6 +4,7 @@
 
 | Version | Feature Domain | Key Objectives |
 |---|---|---|
+| 0.0.5 | Structured Output & Test Packaging | Return typed agent decisions via OpenRouter structured output; make `tests` an importable package so shared fakes can be reused |
 | 0.0.4 | Agent Domain & Documentation | Define the agent decision contract in the domain layer; document runtime behaviour with sequence diagrams |
 | 0.0.3 | Configuration, Packaging & LLM Provider | Make the project installable and importable from any directory; load `.env` from the project root; fail fast on missing OpenRouter credentials; default to a zero-cost OpenRouter model |
 | 0.0.2 | Planning & Scaffolding | Record the phased roadmap and initial project scaffold |
@@ -18,6 +19,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Project re-initialization complete.
 - Focus on implementing the phased roadmap starting from Phase 0.
+
+## [0.0.5] - 2026-10-02
+
+This release replaces the placeholder agent decision with real structured output from
+OpenRouter, and makes `tests` an importable package so test doubles can be shared.
+
+### Added
+
+- `LLMClient.structured(user_message, output_model)`, generic over
+  `TypeVar("T", bound=BaseModel)`. Calls `chat.completions.parse` with
+  `response_format=output_model` and raises `ValueError` when the model returns no
+  parsed object.
+- `tests/__init__.py`, `tests/agent/__init__.py`, and `tests/domain/__init__.py`,
+  making `tests` a regular package.
+- `tests/agent/fakes.py` with a `FakeLLM` test double implementing `structured`, so
+  agent tests do not require network access.
+
+### Changed
+
+- `SupportAgent.decide` now returns a typed `AgentDecision` via `llm.structured`
+  instead of raising `NotImplementedError`. The prompt no longer requests raw JSON
+  directly, relying on `response_format` for schema enforcement.
+- `tests/agent/test_agent.py` uses the shared `FakeLLM` and now exercises
+  `decide` in addition to `execute`.
+
+### Fixed
+
+- `ModuleNotFoundError: No module named 'tests'` during collection. `tests` had no
+  `__init__.py`, so the dotted `tests.agent.fakes` import could not resolve.
+
+### Known Issues
+
+- **The agent decision path fails against the live API.** Verified against
+  `poolside/laguna-s-2.1:free`: `SupportAgent.decide` raises
+  `ValidationError: Invalid JSON: expected value at line 1 column 1` because the model
+  returns Markdown prose (`**Action:** create_ticket ...`) instead of JSON. The unit
+  test passes only because `FakeLLM` bypasses the transport entirely, so this is not
+  covered by CI.
+- Root cause is the prompt: `agent.py:19-40` no longer states the expected JSON shape.
+  Re-adding an explicit `Return JSON with exactly these fields` block made the same
+  live call succeed and return a validated `AgentAction.DRAFT_RESPONSE`. Relying on
+  `response_format` alone is not sufficient for this model.
+- `TicketClassifier.classify` (`classifier.py:39`) still raises
+  `NotImplementedError` unconditionally and still calls `llm.chat` rather than
+  `llm.structured`, so it is subject to the same failure above.
+- `docs/sequence-diagram.md` is now **stale**: it states that `SupportAgent.decide`
+  raises `NotImplementedError` and that only `execute` is functional. Both were true at
+  0.0.4 but no longer hold. The Mermaid syntax also remains unverified, as
+  `@mermaid-js/mermaid-cli` could not be installed.
+- `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
+  `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
+  `tests/domain/test_ticket.py`, and an unused `result` local in
+  `src/support_ops/classifier.py`.
 
 ## [0.0.4] - 2026-10-02
 
@@ -44,17 +98,11 @@ the runtime with sequence diagrams.
 
 ### Known Issues
 
-- `SupportAgent.decide` (`agent.py:50`) and `TicketClassifier.classify`
-  (`classifier.py:39`) still raise `NotImplementedError` unconditionally. Both send a
-  prompt to the model and then discard the response. Only `SupportAgent.execute` is
-  functional, and the passing agent test bypasses `decide` entirely via `FakeLLM`, so
-  model-output parsing remains unverified.
-- Neither `SupportAgent` nor `TicketClassifier` is constructed by `main()`, and no
-  module outside their own tests imports them. The composition described in roadmap
-  Phase 3 and 4 does not exist yet.
-- The Mermaid diagrams are **unverified**. Rendering could not be validated locally
-  because `@mermaid-js/mermaid-cli` failed to install, so syntax has been hand-checked
-  only and should be confirmed in a Mermaid-capable viewer.
+- `TicketClassifier.classify` (`classifier.py:39`) still raises `NotImplementedError`
+  unconditionally. See 0.0.5 for the live-API structured output failure that will affect
+  it once implemented.
+- The Mermaid diagrams in `docs/sequence-diagram.md` are unverified, because
+  `@mermaid-js/mermaid-cli` could not be installed. Syntax has been hand-checked only.
 - `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
   `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
   `tests/domain/test_ticket.py`, and an unused `result` local in

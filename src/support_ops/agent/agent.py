@@ -64,3 +64,12 @@ Provide a short reason for your decision.
             return "Human escalation will be implemented next."
 
         raise ValueError(f"Unsupported action: {decision.action}")
+
+
+    def run(self, ticket: IncomingTicket) -> ToolResult | str:
+        decision = self.decide(ticket)
+
+        return self.execute(
+            ticket,
+            decision,
+        )
