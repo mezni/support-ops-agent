@@ -15,10 +15,11 @@ class SupportAgent:
         self,
         ticket: IncomingTicket,
     ) -> AgentDecision:
+
         prompt = f"""
 You are a customer support agent.
 
-Analyze this support ticket:
+Analyze this support ticket.
 
 Customer ID:
 {ticket.customer_id}
@@ -29,25 +30,19 @@ Subject:
 Description:
 {ticket.description}
 
-Choose exactly one action:
+Choose the most appropriate action:
 
 - draft_response
 - create_ticket
 - escalate
 
-Return JSON:
-
-{{
-  "action": "...",
-  "reason": "..."
-}}
+Provide a short reason for your decision.
 """
 
-        result = self.llm.chat(prompt)
-
-        # Temporary.
-        # Structured parsing will be implemented later.
-        raise NotImplementedError(f"Model decision received: {result}")
+        return self.llm.structured(
+            prompt,
+            AgentDecision,
+        )
 
     def execute(
         self,

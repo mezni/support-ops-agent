@@ -1,6 +1,12 @@
+from typing import TypeVar
+
 from openai import OpenAI
+from pydantic import BaseModel
 
 from support_ops.config import Settings
+
+
+T = TypeVar("T", bound=BaseModel)
 
 
 class LLMClient:
@@ -24,3 +30,26 @@ class LLMClient:
         )
 
         return response.choices[0].message.content or ""
+
+    def structured(
+        self,
+        user_message: str,
+        output_model: type[T],
+    ) -> T:
+        response = self.client.chat.completions.parse(
+            model=self.settings.openrouter_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_message,
+                }
+            ],
+            response_format=output_model,
+        )
+
+        parsed = response.choices[0].message.parsed
+
+        if parsed is None:
+            raise ValueError("Model returned no structured output")
+
+        return parsed
