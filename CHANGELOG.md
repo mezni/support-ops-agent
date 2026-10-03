@@ -4,6 +4,7 @@
 
 | Version | Feature Domain | Key Objectives |
 |---|---|---|
+| 0.0.8 | Memory Layer | Give the agent short-term conversation memory and per-customer long-term memory, and inject recalled customer context into the decision prompt |
 | 0.0.7 | Knowledge Retrieval Layer | Add an in-memory knowledge base with a retriever and a search tool; enforce the `Tool` contract on all tools |
 | 0.0.6 | Tool Registry & Documentation | Route agent actions through a pluggable tool registry; make the composition root explicit; bring both diagram documents up to date with the code |
 | 0.0.5 | Structured Output & Test Packaging | Return typed agent decisions via OpenRouter structured output; make `tests` an importable package so shared fakes can be reused |
@@ -21,6 +22,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Project re-initialization complete.
 - Focus on implementing the phased roadmap starting from Phase 0.
+
+## [0.0.8] - 2026-10-03
+
+This release adds the memory layer and wires it into the agent's decision step. The agent
+now records each incoming ticket in short-term memory and reads the customer's facts,
+preferences, and previous tickets back into the decision prompt.
+
+### Added
+
+- `support_ops/memory/` package:
+  - `ConversationMessage` (`BaseModel`) with `role`, `content`, and a UTC `timestamp`
+    defaulting to now.
+  - `CustomerMemory` (`BaseModel`) with `customer_id`, `facts`, `preferences`,
+    `previous_tickets`, and an `updated_at` default.
+  - `ShortTermMemory`, an in-process `ConversationMessage` buffer with `add`,
+    `get_messages`, and `clear`. `get_messages` returns a copy.
+  - `LongTermMemory`, a per-customer store with `get`, `save`, `add_ticket`,
+    `add_fact`, and `add_preference`.
+  - `MemoryManager`, the facade the agent depends on. It routes each call to the
+    appropriate store so callers never choose one: `remember_message` and
+    `get_conversation` to short-term, `get_customer`, `remember_fact`, and
+    `remember_ticket` to long-term.
+- `SupportAgent.decide` now calls `memory.remember_message` and `memory.get_customer`
+  before prompting the model.
+- Prompt sections in `decide` for `Customer facts`, `Customer preferences`, and
+  `Previous tickets`.
+- `tests/memory/test_memory.py` covering short-term recording, long-term facts, and
+  previous-ticket tracking.
+- `docs/class-diagram.md` gained a memory-layer class diagram and a section documenting
+  the layer's behavioural traps.
+- `docs/sequence-diagram.md` gained a "Memory-augmented decision" sequence diagram
+  covering the read and write halves of `decide`.
+
+### Changed
+
+- `SupportAgent.__init__` now requires a `MemoryManager` as its third argument. This is
+  a breaking constructor change for any existing caller.
+- `main` constructs a `MemoryManager` and injects it into `SupportAgent`.
+- `tests/agent/test_agent.py` passes a real `MemoryManager`.
+- The decision prompt now opens with "You are a support operations agent" and carries
+  customer context. The action list and the explicit `Return JSON with exactly these
+  fields` contract are unchanged.
+
+### Known issues
+
+These are documented rather than fixed, and are recorded here so they are not mistaken
+for regressions later.
+
+- **`decide` is not idempotent.** It writes to short-term memory on every call, so
+  calling it twice on one ticket stores the description twice. Nothing de-duplicates on
+  `ticket_id`. Roadmap Phase 3 calls `decide` inside a `while` loop, so a loop
+  implementation would multiply entries. Recording on `run`, or guarding on `ticket_id`,
+  would fix it.
+- **`LongTermMemory.get` mutates on read.** A getter inserts an empty `CustomerMemory`
+  for an unseen customer. Since `decide` calls `get_customer` for every ticket, the
+  first ticket from any new customer creates a record as a side effect of reading it.
+  There is no way to ask whether a customer is known without creating them, so unknown
+  and known-but-empty are indistinguishable and both render as `{}`.
+- **`updated_at` does not track modification.** It is set once at construction and never
+  refreshed, so it records creation time rather than last modification.
+- **`ShortTermMemory` is unbounded.** There is no eviction and no maximum length, so the
+  buffer grows with every recorded message. Roadmap Phase 6 specifies "Last 5
+  exchanges".
+- **Memory context reaches the model as Python `repr`, not JSON.** `decide` interpolates
+  the fields directly into an f-string, so the prompt contains `{'plan': 'premium'}`
+  with single quotes. Models generally handle this, but `json.dumps` would emit a valid
+  literal.
+- **Customer memory is never populated in the running system.** `remember_fact` and
+  `remember_ticket` are only exercised by tests. Nothing extracts facts or previous
+  ticket ids from resolved tickets, so in a live run every customer renders as empty
+  context.
+- **Memory is not persisted.** Both stores are per-process, so all context is lost on
+  exit. Roadmap Phase 2 specifies SQLite.
+- **Memory context is untested at the agent level.** `FakeLLM` ignores its prompt, so no
+  test asserts that customer facts, preferences, or previous tickets actually reach the
+  model. A regression in prompt assembly would not fail any test. The behaviour was
+  verified manually with a prompt-capturing fake instead.
+- **`memory/` uses relative imports** where every other package uses absolute
+  `from support_ops.x import y`. Not incorrect, but inconsistent.
 
 ## [0.0.7] - 2026-10-02
 

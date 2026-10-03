@@ -1,6 +1,6 @@
 # Sequence Diagrams
 
-Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.7**.
+Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.8**.
 
 These describe **implemented** behaviour, not the target architecture in
 [roadmap.md](roadmap.md). Where a code path raises `NotImplementedError`, that is shown
@@ -31,6 +31,7 @@ sequenceDiagram
     participant Store as KnowledgeStore
     participant Retriever as KnowledgeRetriever
     participant Registry as create_default_registry
+    participant MemoryMgr as MemoryManager
     participant SDK as openai.OpenAI
 
     CLI->>Main: runpy invokes main
@@ -54,6 +55,8 @@ sequenceDiagram
     Main->>Retriever: KnowledgeRetriever store
     Main->>Registry: create_default_registry retriever
     Registry-->>Main: ToolRegistry with create_ticket and search_knowledge_base
+    Main->>MemoryMgr: MemoryManager
+    MemoryMgr-->>Main: fresh short-term buffer and empty customer map
     Main->>Main: build IncomingTicket T-001
 ```
 
@@ -84,6 +87,14 @@ sequenceDiagram
     participant Tool as CreateTicketTool
 
     Main->>Agent: run ticket
+    Agent->>MemoryMgr: remember_message role user and ticket description
+    MemoryMgr-->>Agent: appended to short-term buffer
+    Agent->>MemoryMgr: get_customer ticket.customer_id
+    alt customer record absent
+        MemoryMgr-->>Agent: CustomerMemory created as a side effect
+    else customer record present
+        MemoryMgr-->>Agent: existing CustomerMemory
+    end
     Agent->>LLMClient: decide ticket, structured prompt and AgentDecision
     LLMClient->>SDK: chat.completions.parse response_format AgentDecision
     SDK->>API: HTTPS request
@@ -112,7 +123,7 @@ sequenceDiagram
 The prompt sent in step 2 must state the JSON shape explicitly. `response_format` alone
 does not constrain `poolside/laguna-s-2.1:free`, which otherwise replies with Markdown
 prose such as `**Chosen action:** escalate` and causes `ValidationError: Invalid JSON`.
-Adding a `Return JSON with exactly these fields` block fixed this.
+The customer-context sections were added to the prompt without disturbing that contract.
 
 **The `search_knowledge_base` tool is never reached.** The registry holds it, but
 `AgentAction` has only `draft_response`, `create_ticket`, and `escalate`, so the model
@@ -124,7 +135,64 @@ dispatch.
 
 ---
 
-## 3. Knowledge retrieval
+## 3. Memory-augmented decision
+
+Detail of `SupportAgent.decide`, which both reads and writes memory. This matters
+because `decide` is **not idempotent**: the write happens on every call.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent as SupportAgent
+    participant Manager as MemoryManager
+    participant Short as ShortTermMemory
+    participant Long as LongTermMemory
+    participant LLMClient as LLMClient
+
+    Agent->>Manager: remember_message role user and ticket description
+    Manager->>Short: add role and content
+    Short-->>Manager: ConversationMessage appended, no eviction
+    Agent->>Manager: get_customer ticket.customer_id
+    Manager->>Long: get customer_id
+    alt first time this customer is seen
+        Long->>Long: insert empty CustomerMemory
+        Note over Long: read has a write side effect
+    end
+    Long-->>Manager: CustomerMemory
+    Manager-->>Agent: CustomerMemory
+    Agent->>Agent: interpolate facts preferences previous_tickets into prompt
+    Agent->>LLMClient: structured prompt and AgentDecision
+    LLMClient-->>Agent: AgentDecision
+```
+
+Two consequences of doing the write inside `decide`:
+
+1. **Repeated calls duplicate messages.** Calling `decide` twice on one ticket stores
+   the description twice, because nothing de-duplicates on `ticket_id`. The roadmap
+   Phase 3 agent loop calls `decide` inside a `while`, so a loop implementation would
+   multiply entries.
+2. **Short-term memory is never bounded.** No eviction is applied, so the buffer grows
+   with every call. Roadmap Phase 6 specifies "Last 5 exchanges".
+
+The interpolated context appears in the prompt as Python `repr`, not JSON:
+
+```
+Customer facts:
+{'plan': 'premium'}
+
+Customer preferences:
+{'contact': 'email'}
+
+Previous tickets:
+['T-000']
+```
+
+A newly seen customer renders as `{}` and `[]`, which is indistinguishable from a known
+customer that simply has no recorded facts.
+
+---
+
+## 4. Knowledge retrieval
 
 Reachable today only from tests and from `main`, never through the agent. Scoring is
 token-set overlap over `title + category + content`.
@@ -163,7 +231,7 @@ seed corpus, but a customer phrasing like "can't sign in" will not match the
 
 ---
 
-## 4. Tool dispatch detail
+## 5. Tool dispatch detail
 
 The two-phase tool contract inside `execute`. The agent asks the tool for its input
 schema, builds a validated model, then executes. It never touches tool internals.
@@ -201,7 +269,7 @@ called once per registry.
 
 ---
 
-## 5. Unimplemented classifier path
+## 6. Unimplemented classifier path
 
 `TicketClassifier.classify` sends a prompt and then **discards** the response, raising
 `NotImplementedError`. It is not constructed by `main`, so this path is unreachable in
@@ -231,7 +299,7 @@ block, so the fix is a one-line change to call
 
 ---
 
-## 6. Structured output contract
+## 7. Structured output contract
 
 `LLMClient.structured` is generic over pydantic models and is the single place where
 model output becomes a typed value.
@@ -283,6 +351,22 @@ fix belonged in the prompt rather than in the transport.
 | `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
 | `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **unreachable from agent** |
 | `tools/registry.py` | `ToolRegistry` and default factory | Working |
-| `agent/agent.py` | `decide`, `execute`, `run` | Working; 2 of 3 actions placeholders |
+| `agent/agent.py` | `decide`, `execute`, `run`; reads and writes memory | Working; 2 of 3 actions placeholders |
 | `agent/tools.py` | Legacy `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
+| `memory/models.py` | `ConversationMessage`, `CustomerMemory` | Working |
+| `memory/short_term.py` | In-process message buffer | Working, unbounded |
+| `memory/long_term.py` | Per-customer facts and tickets | Working, `get` mutates on read |
+| `memory/manager.py` | Routes reads and writes to the right store | Working, `get_conversation` untyped |
 | `classifier.py` | `classify` LLM parsing | Raises `NotImplementedError` |
+
+---
+
+## See also
+
+- `docs/class-diagram.md` for the static structure, including the memory layer types and
+  their behavioural traps.
+- `CHANGELOG.md` for what changed in 0.0.8.
+- [roadmap.md](roadmap.md) for the target architecture. The memory layer documented here
+  is Phase 2, and it is behind the roadmap in three respects: the store is per-process
+  rather than SQLite, `ShortTermMemory` is unbounded rather than "Last 5 exchanges", and
+  nothing populates long-term facts or previous tickets automatically.

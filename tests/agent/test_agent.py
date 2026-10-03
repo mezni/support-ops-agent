@@ -3,6 +3,7 @@ from support_ops.domain.ticket import IncomingTicket
 from support_ops.knowledge.retriever import KnowledgeRetriever
 from support_ops.knowledge.seed import default_documents
 from support_ops.knowledge.store import KnowledgeStore
+from support_ops.memory.manager import MemoryManager
 from support_ops.tools.registry import create_default_registry
 
 from tests.agent.fakes import FakeLLM
@@ -14,6 +15,7 @@ def test_agent_decides_and_executes() -> None:
     agent = SupportAgent(
         llm=FakeLLM(),
         tools=create_default_registry(retriever),
+        memory=MemoryManager(),
     )
 
     ticket = IncomingTicket(

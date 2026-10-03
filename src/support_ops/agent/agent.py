@@ -6,26 +6,34 @@ from support_ops.domain.ticket import (
 from support_ops.llm import LLMClient
 from support_ops.tools.base import ToolResult
 from support_ops.tools.registry import ToolRegistry
+from support_ops.memory.manager import MemoryManager
 
 
 class SupportAgent:
     def __init__(
         self,
-        llm: LLMClient,
-        tools: ToolRegistry,
-    ):
+        llm,
+        tools,
+        memory: MemoryManager,
+    ) -> None:
         self.llm = llm
         self.tools = tools
+        self.memory = memory
 
     def decide(
         self,
         ticket: IncomingTicket,
     ) -> AgentDecision:
 
-        prompt = f"""
-You are a customer support agent.
+        self.memory.remember_message(
+            role="user",
+            content=ticket.description,
+        )
 
-Analyze this support ticket.
+        customer_memory = self.memory.get_customer(ticket.customer_id)
+
+        prompt = f"""
+You are a support operations agent.
 
 Customer ID:
 {ticket.customer_id}
@@ -35,6 +43,15 @@ Subject:
 
 Description:
 {ticket.description}
+
+Customer facts:
+{customer_memory.facts}
+
+Customer preferences:
+{customer_memory.preferences}
+
+Previous tickets:
+{customer_memory.previous_tickets}
 
 Choose one action:
 

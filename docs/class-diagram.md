@@ -1,6 +1,6 @@
 # Class Diagram
 
-Static structure of `support-ops-agent` as it exists at version **0.0.7**.
+Static structure of `support-ops-agent` as it exists at version **0.0.8**.
 
 Companion to [sequence-diagram.md](sequence-diagram.md), which shows runtime ordering.
 This document shows types, members, and relationships. Implemented and unimplemented
@@ -31,9 +31,52 @@ classDiagram
     class SupportAgent {
         -LLMClient llm
         -ToolRegistry tools
+        -MemoryManager memory
         +decide(ticket) AgentDecision
         +execute(ticket, decision) ToolResult or str
         +run(ticket) ToolResult or str
+    }
+
+    class MemoryManager {
+        -ShortTermMemory short_term
+        -LongTermMemory long_term
+        +remember_message(role, content) None
+        +get_conversation() list
+        +get_customer(customer_id) CustomerMemory
+        +remember_fact(customer_id, key, value) None
+        +remember_ticket(customer_id, ticket_id) None
+    }
+
+    class ShortTermMemory {
+        -list _messages
+        +add(role, content) None
+        +get_messages() ConversationMessage
+        +clear() None
+    }
+
+    class LongTermMemory {
+        -dict _customers
+        +get(customer_id) CustomerMemory
+        +save(memory) None
+        +add_ticket(customer_id, ticket_id) None
+        +add_fact(customer_id, key, value) None
+        +add_preference(customer_id, key, value) None
+    }
+
+    class CustomerMemory {
+        <<PydanticModel>>
+        +str customer_id
+        +dict preferences
+        +dict facts
+        +list previous_tickets
+        +datetime updated_at
+    }
+
+    class ConversationMessage {
+        <<PydanticModel>>
+        +str role
+        +str content
+        +datetime timestamp
     }
 
     class TicketClassifier {
@@ -190,6 +233,12 @@ classDiagram
     TicketClassifier o-- LLMClient : llm
     SupportAgent o-- LLMClient : llm
     SupportAgent o-- ToolRegistry : tools
+    SupportAgent o-- MemoryManager : memory
+    MemoryManager *-- ShortTermMemory : short_term
+    MemoryManager *-- LongTermMemory : long_term
+    ShortTermMemory o-- ConversationMessage : _messages
+    LongTermMemory o-- CustomerMemory : _customers
+    LongTermMemory ..> CustomerMemory : get creates and returns
     ToolRegistry o-- Tool : _tools
     Tool <|-- CreateTicketTool
     Tool <|-- SearchKnowledgeBaseTool
@@ -216,8 +265,125 @@ classDiagram
 `*--` is composition: the owner creates the part. `o--` is aggregation: the consumer
 holds a caller-supplied reference. `..>` is a dependency with no stored reference.
 
-`SupportAgent` holds `ToolRegistry` by aggregation rather than composition because the
-registry is injected, which is what lets tests substitute tooling.
+`SupportAgent` holds `ToolRegistry` and `MemoryManager` by aggregation rather than
+composition because both are injected, which is what lets tests substitute them.
+
+---
+
+## Memory layer
+
+```mermaid
+classDiagram
+    direction LR
+
+    class MemoryManager {
+        -ShortTermMemory short_term
+        -LongTermMemory long_term
+        +remember_message(role, content) None
+        +get_conversation() list
+        +get_customer(customer_id) CustomerMemory
+        +remember_fact(customer_id, key, value) None
+        +remember_ticket(customer_id, ticket_id) None
+    }
+
+    class ShortTermMemory {
+        -list _messages
+        +add(role, content) None
+        +get_messages() ConversationMessage
+        +clear() None
+    }
+
+    class LongTermMemory {
+        -dict _customers
+        +get(customer_id) CustomerMemory
+        +save(memory) None
+        +add_ticket(customer_id, ticket_id) None
+        +add_fact(customer_id, key, value) None
+        +add_preference(customer_id, key, value) None
+    }
+
+    class ConversationMessage {
+        <<PydanticModel>>
+        +str role
+        +str content
+        +datetime timestamp
+    }
+
+    class CustomerMemory {
+        <<PydanticModel>>
+        +str customer_id
+        +dict preferences
+        +dict facts
+        +list previous_tickets
+        +datetime updated_at
+    }
+
+    MemoryManager *-- ShortTermMemory
+    MemoryManager *-- LongTermMemory
+    ShortTermMemory o-- ConversationMessage
+    LongTermMemory o-- CustomerMemory
+```
+
+`MemoryManager` is the only type the agent depends on. It owns the routing decision:
+`remember_message` goes to the bounded-in-spirit short-term buffer, while
+`remember_fact` and `remember_ticket` go to long-term storage. Callers never choose a
+store.
+
+Unlike the rest of the codebase, `memory/` uses **relative imports**
+(`from .models import ...`) where every other package uses absolute
+`from support_ops.x import y`. Not incorrect, but inconsistent.
+
+### `LongTermMemory.get()` mutates on read
+
+A getter that inserts:
+
+```
+before get, records: 0
+after  get, records: 1   <- get() inserted an empty record
+```
+
+`SupportAgent.decide` calls `get_customer` on every ticket, so the first ticket from
+any new customer creates an empty `CustomerMemory` as a side effect of reading. Two
+consequences:
+
+- There is no way to ask "do I know this customer?" without creating them, so unknown
+  and known-but-empty are indistinguishable. Both render as `{}` in the prompt.
+- A mistyped `customer_id` silently inserts a phantom record instead of failing.
+
+`add_ticket` additionally guards against duplicates, so `previous_tickets` cannot
+accumulate repeats; `add_fact` and `add_preference` are idempotent by dict assignment.
+
+### `updated_at` does not track modification
+
+`updated_at` is set once by `default_factory` at construction and never refreshed.
+Verified: after `add_fact` followed by `add_ticket`, `updated_at` was unchanged. It
+records creation time, not last modification, so the field name misleads.
+
+### `ShortTermMemory` is unbounded
+
+There is no eviction and no maximum length. A thousand `add` calls retain a thousand
+messages. Roadmap Phase 6 specifies "Last 5 exchanges", so a long session grows without
+limit. A `deque(maxlen=...)` would cap it. `get_messages` does return a copy, so callers
+cannot mutate the buffer by accident.
+
+### Customer context reaches the model as Python repr
+
+`decide` interpolates the memory fields directly into an f-string, so the prompt
+literally contains:
+
+```
+Customer facts:
+{'plan': 'premium'}
+
+Customer preferences:
+{'contact': 'email'}
+
+Previous tickets:
+['T-000']
+```
+
+These are Python `repr` forms with single quotes, not valid JSON. Models generally
+handle this, but `json.dumps` would emit a valid literal if that matters.
 
 ---
 
@@ -553,6 +719,10 @@ declare `-> AgentDecision` with no cast.
 | `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
 | `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **unreachable from agent** |
 | `tools/registry.py` | `ToolRegistry`, `create_default_registry` | Working, now requires a retriever |
+| `memory/models.py` | `ConversationMessage`, `CustomerMemory` | Working |
+| `memory/short_term.py` | `ShortTermMemory` | Working, unbounded |
+| `memory/long_term.py` | `LongTermMemory` | Working, `get` mutates |
+| `memory/manager.py` | `MemoryManager` | Working, no return type on `get_conversation` |
 | `agent/agent.py` | `decide`, `execute`, `run` | Working; 2 of 3 actions placeholders |
 | `main.py` | module function only | Working composition root |
 | `agent/tools.py` | `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
@@ -563,9 +733,18 @@ declare `-> AgentDecision` with no cast.
 
 ## Known gaps
 
+- **`decide` is not idempotent.** It records the ticket description to short-term
+  memory on every call, so calling it twice on one ticket stores the message twice. The
+  roadmap Phase 3 agent loop calls `decide` inside a `while`, so a loop implementation
+  would multiply entries. Recording on `run` instead, or de-duplicating by `ticket_id`,
+  would fix it.
+- **Memory context is untested.** The agent test uses `FakeLLM`, which ignores its
+  prompt, so nothing asserts that customer facts, preferences, or previous tickets
+  actually reach the model. A silent regression in prompt assembly would not fail any
+  test.
 - **`search_knowledge_base` is unreachable from the agent.** It is registered, but
   `AgentAction` has no matching member and `execute` has no dispatch branch, so the
-  decision schema cannot even express the action. See
+  decision schema cannot express a knowledge lookup. See
   [registered versus reachable](#registered-tools-versus-reachable-tools).
 - **`TicketClassifier.classify` is unimplemented.** It calls `llm.chat`, discards the
   result, and raises `NotImplementedError`. It should call `llm.structured` with
@@ -576,6 +755,9 @@ declare `-> AgentDecision` with no cast.
   ticket id `T-NEW-001` rather than persisting anything.
 - **Retriever scoring is naive.** Token-set overlap with no stemming, IDF, or
   normalisation. It matches the seed corpus but not natural customer phrasing.
+- **Memory layer traps.** `LongTermMemory.get` inserts on read, `updated_at` does not
+  track modification, and `ShortTermMemory` is unbounded. See
+  [memory layer](#memory-layer).
 - **Model choice drives the demo.** `poolside/laguna-s-2.1:free` selected `escalate` for
   every ticket tried, including unambiguous duplicate-billing cases. `main()` therefore
   usually prints a placeholder string rather than exercising tool execution. Test

@@ -5,6 +5,7 @@ from support_ops.knowledge.retriever import KnowledgeRetriever
 from support_ops.knowledge.seed import default_documents
 from support_ops.knowledge.store import KnowledgeStore
 from support_ops.llm import LLMClient
+from support_ops.memory.manager import MemoryManager
 from support_ops.tools.registry import create_default_registry
 
 
@@ -19,9 +20,12 @@ def main() -> None:
 
     tools = create_default_registry(retriever)
 
+    memory = MemoryManager()
+
     agent = SupportAgent(
         llm=llm,
         tools=tools,
+        memory=memory,
     )
 
     ticket = IncomingTicket(
