@@ -1,14 +1,21 @@
 from support_ops.agent.agent import SupportAgent
 from support_ops.domain.ticket import IncomingTicket
+from support_ops.knowledge.retriever import KnowledgeRetriever
+from support_ops.knowledge.seed import default_documents
+from support_ops.knowledge.store import KnowledgeStore
 from support_ops.tools.registry import create_default_registry
 
 from tests.agent.fakes import FakeLLM
 
 
 def test_agent_decides_and_executes() -> None:
+    retriever = KnowledgeRetriever(
+        KnowledgeStore(default_documents())
+    )
+
     agent = SupportAgent(
         llm=FakeLLM(),
-        tools=create_default_registry(),
+        tools=create_default_registry(retriever),
     )
 
     ticket = IncomingTicket(

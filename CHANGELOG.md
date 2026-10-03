@@ -4,6 +4,7 @@
 
 | Version | Feature Domain | Key Objectives |
 |---|---|---|
+| 0.0.7 | Knowledge Retrieval Layer | Add an in-memory knowledge base with a retriever and a search tool; enforce the `Tool` contract on all tools |
 | 0.0.6 | Tool Registry & Documentation | Route agent actions through a pluggable tool registry; make the composition root explicit; bring both diagram documents up to date with the code |
 | 0.0.5 | Structured Output & Test Packaging | Return typed agent decisions via OpenRouter structured output; make `tests` an importable package so shared fakes can be reused |
 | 0.0.4 | Agent Domain & Documentation | Define the agent decision contract in the domain layer; document runtime behaviour with sequence diagrams |
@@ -20,6 +21,89 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Project re-initialization complete.
 - Focus on implementing the phased roadmap starting from Phase 0.
+
+## [0.0.7] - 2026-10-02
+
+This release adds a knowledge retrieval layer and a second tool that searches it, and
+corrects the tool contract so both tools are actually constrained by `Tool`.
+
+### Added
+
+- `support_ops/knowledge/` package:
+  - `KnowledgeDocument` (`BaseModel`) with `id`, `title`, `content`, and `category`.
+  - `KnowledgeStore`, an in-memory list holder exposing `all()`.
+  - `seed.default_documents()` returning four hard-coded articles covering password
+    reset, duplicate billing, account lockout, and refund policy.
+  - `KnowledgeRetriever.search(query, limit)` returning ranked `SearchResult` records.
+  - `SearchResult` (`dataclass`) pairing a `KnowledgeDocument` with a `float` score.
+- `SearchKnowledgeBaseInput` (`BaseModel`) with `query` and a `limit` bounded by
+  `ge=1, le=10`, plus `SearchKnowledgeBaseTool` wrapping a `KnowledgeRetriever`.
+- `tests/knowledge/test_retriever.py` covering a billing-document lookup.
+- `docs/class-diagram.md` and `docs/sequence-diagram.md` extended with the knowledge
+  layer, a new knowledge-retrieval sequence diagram, a registered-versus-reachable tool
+  comparison, and a knowledge layer class diagram.
+
+### Changed
+
+- `create_default_registry` now requires a `KnowledgeRetriever` and registers
+  `search_knowledge_base` alongside `create_ticket`.
+- `main` builds `KnowledgeStore`, `KnowledgeRetriever`, and the registry explicitly.
+- `tests/agent/test_agent.py` constructs a real retriever from `default_documents()` and
+  passes it to `create_default_registry`.
+
+### Fixed
+
+- `TypeError: create_default_registry() missing 1 required positional argument:
+  'retriever'` in `tests/agent/test_agent.py`, after the factory signature changed.
+- `SearchKnowledgeBaseTool` did not subclass `Tool`. Python accepts this silently
+  because annotations are unchecked at runtime, so `ToolRegistry.register(tool: Tool)`
+  took the object without complaint while nothing guaranteed `execute` or
+  `argument_schema` existed and `ToolRegistry.list() -> list[Tool]` was inaccurate. It
+  now inherits from `Tool` with no abstract methods left unimplemented.
+
+### Known Issues
+
+- **`search_knowledge_base` is registered but unreachable from the agent.**
+  `AgentAction` has only `draft_response`, `create_ticket`, and `escalate`, and
+  `execute` has no branch resolving `"search_knowledge_base"`, so the decision schema
+  cannot express a knowledge lookup. The knowledge base cannot influence any decision.
+  Wiring it requires both an `AgentAction.SEARCH_KNOWLEDGE_BASE` member and an `execute`
+  dispatch branch. Tests are green regardless because the agent test asserts on
+  `create_ticket`.
+- **Retriever scoring is naive token overlap.** `score` is the size of the intersection
+  of word *sets* over lowercased `title + category + content`, with no stemming, no IDF
+  weighting, no normalisation, and no multiset counting, so a repeated term cannot raise
+  a score and `2.0` means literally "two shared words". It matches the seed corpus
+  (`customer charged twice` to KB-002, `refund policy` to KB-004) but not natural
+  customer phrasing: `can't sign in` will not match the "Account Locked" document.
+- **Duplicate `ToolResult` types.** `agent/tools.py` still defines an unrelated
+  `@dataclass ToolResult` and a `create_ticket` function. Nothing imports it any more, so
+  it remains dead code, but `from support_ops.agent.tools import ToolResult` still
+  succeeds and yields a differently-shaped object than
+  `from support_ops.tools.base import ToolResult`.
+- `TicketClassifier.classify` (`classifier.py:39`) still raises `NotImplementedError`
+  and still calls `llm.chat` rather than `llm.structured`. Its prompt is already
+  correct, so the fix is a one-line change. It is not constructed by `main`.
+- `SupportAgent.execute` is partial: only `CREATE_TICKET` invokes a tool, and the
+  declared return type is `ToolResult | str`, so callers must type-check before reading
+  `.success`.
+- **`ToolResult.data` shape is inconsistent between tools.** `create_ticket` returns
+  flat keys (`ticket_id`, `customer_id`); `search_knowledge_base` returns a single
+  nested `results` list of dicts. Consumers must special-case per tool.
+- `CreateTicketTool` fabricates a constant ticket id `T-NEW-001` and persists nothing.
+- Tools are never advertised to the model. The `AgentAction` enum and the
+  `ToolRegistry` are maintained separately and can drift apart with no test failing.
+- `poolside/laguna-s-2.1:free` selected `escalate` for every ticket tried, including
+  unambiguous duplicate-billing cases, so `main` usually prints a placeholder string
+  rather than exercising tool execution. Exercise `execute` with an explicit
+  `AgentDecision` to test dispatch independently of model judgement.
+- `tests/knowledge/` and `tests/tools/` have no `__init__.py`, unlike `tests/agent/` and
+  `tests/domain/`. Collection works only because no other test module shares those
+  basenames; a duplicate basename elsewhere would cause an import mismatch.
+- `ruff check` reports 5 findings, 4 auto-fixable: unused `pydantic.Field` in
+  `domain/ticket.py`, unused `IncomingTicket` in `tests/domain/test_ticket.py`, unused
+  `result` local in `classifier.py`, and import sorting in `llm.py` and
+  `tests/agent/test_agent.py`.
 
 ## [0.0.6] - 2026-10-02
 
@@ -85,14 +169,12 @@ with the code.
   type is `ToolResult | str`, so callers must type-check before reading `.success`.
 - `CreateTicketTool` fabricates a constant ticket id `T-NEW-001` and persists nothing.
 - Tools are never advertised to the model. The `AgentAction` enum and the
-  `ToolRegistry` are maintained separately and can drift apart.
+  `ToolRegistry` are maintained separately and can drift apart. See 0.0.7, where
+  registering a second tool made the drift concrete.
 - `poolside/laguna-s-2.1:free` selected `escalate` for every ticket tried, including
   unambiguous duplicate-billing cases, so `main` usually prints a placeholder string
   rather than exercising tool execution. Exercise `execute` with an explicit
   `AgentDecision` to test dispatch independently of model judgement.
-- `tests/tools/` has no `__init__.py`, unlike `tests/agent/` and `tests/domain/`.
-  Collection works only because no other test module shares the basename
-  `test_create_ticket`; a duplicate basename elsewhere would cause an import mismatch.
 - `ruff check` reports 5 findings, 4 auto-fixable: unused `pydantic.Field` in
   `domain/ticket.py`, unused `IncomingTicket` in `tests/domain/test_ticket.py`, unused
   `result` local in `classifier.py`, and import sorting in `llm.py` and

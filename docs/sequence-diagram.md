@@ -1,6 +1,6 @@
 # Sequence Diagrams
 
-Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.6**.
+Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.7**.
 
 These describe **implemented** behaviour, not the target architecture in
 [roadmap.md](roadmap.md). Where a code path raises `NotImplementedError`, that is shown
@@ -27,6 +27,9 @@ sequenceDiagram
     participant EnvFile as .env at PROJECT_ROOT
     participant Validator as _require_credentials
     participant LLMClient as LLMClient
+    participant Seed as knowledge.seed
+    participant Store as KnowledgeStore
+    participant Retriever as KnowledgeRetriever
     participant Registry as create_default_registry
     participant SDK as openai.OpenAI
 
@@ -45,8 +48,12 @@ sequenceDiagram
     LLMClient->>SDK: OpenAI api_key and base_url openrouter
     SDK-->>LLMClient: client ready
     LLMClient-->>Main: LLMClient
-    Main->>Registry: create_default_registry
-    Registry-->>Main: ToolRegistry holding CreateTicketTool
+    Main->>Seed: default_documents
+    Seed-->>Main: 4 KnowledgeDocument
+    Main->>Store: KnowledgeStore documents
+    Main->>Retriever: KnowledgeRetriever store
+    Main->>Registry: create_default_registry retriever
+    Registry-->>Main: ToolRegistry with create_ticket and search_knowledge_base
     Main->>Main: build IncomingTicket T-001
 ```
 
@@ -56,7 +63,8 @@ and produced empty credentials.
 
 `create_default_registry` is a module-level factory, **not** a method on `ToolRegistry`.
 When it was nested inside the class body, its `-> ToolRegistry` annotation was evaluated
-before the name existed, raising `NameError` at import.
+before the name existed, raising `NameError` at import. It now takes a
+`KnowledgeRetriever` because `search_knowledge_base` cannot be constructed without one.
 
 ---
 
@@ -95,6 +103,8 @@ sequenceDiagram
         Agent-->>Main: placeholder string, not implemented
     else action equals ESCALATE
         Agent-->>Main: placeholder string, not implemented
+    else model returns search_knowledge_base
+        Agent-->>Main: impossible, ValidationError at decide
     end
     Main->>Main: print result
 ```
@@ -104,9 +114,56 @@ does not constrain `poolside/laguna-s-2.1:free`, which otherwise replies with Ma
 prose such as `**Chosen action:** escalate` and causes `ValidationError: Invalid JSON`.
 Adding a `Return JSON with exactly these fields` block fixed this.
 
+**The `search_knowledge_base` tool is never reached.** The registry holds it, but
+`AgentAction` has only `draft_response`, `create_ticket`, and `escalate`, so the model
+cannot select knowledge search and `execute` has no branch for it. The knowledge base
+therefore cannot influence the decision, even though `main` builds and injects the whole
+retrieval stack. The fourth branch above is unreachable: a model that did emit
+`"action": "search_knowledge_base"` would fail pydantic validation at `decide`, not at
+dispatch.
+
 ---
 
-## 3. Tool dispatch detail
+## 3. Knowledge retrieval
+
+Reachable today only from tests and from `main`, never through the agent. Scoring is
+token-set overlap over `title + category + content`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Tool as SearchKnowledgeBaseTool
+    participant Input as SearchKnowledgeBaseInput
+    participant Retriever as KnowledgeRetriever
+    participant Store as KnowledgeStore
+    participant Result as SearchResult
+
+    Tool->>Input: validated query and limit
+    Tool->>Retriever: search query and limit
+    Retriever->>Store: all
+    Store-->>Retriever: list of KnowledgeDocument
+    loop for each document
+        Retriever->>Retriever: lowercase and split title category content
+        Retriever->>Retriever: score equals size of word set intersection
+    end
+    Retriever->>Retriever: sort by score descending and truncate to limit
+    Retriever-->>Tool: list of SearchResult
+    Tool->>Tool: flatten to dicts with document_id title content score
+    Tool-->>Tool: ToolResult data results
+```
+
+`limit` is bounded by pydantic at the call site (`ge=1, le=10`), so an out-of-range
+value raises before the search runs. Documents scoring zero are dropped entirely, so an
+unmatched query returns an empty list rather than low-scoring noise.
+
+Scoring has no stemming, no IDF, and no normalisation: a repeated term cannot raise the
+score because sets deduplicate, and `2.0` means literally "two shared words". Matches the
+seed corpus, but a customer phrasing like "can't sign in" will not match the
+"Account Locked" document.
+
+---
+
+## 4. Tool dispatch detail
 
 The two-phase tool contract inside `execute`. The agent asks the tool for its input
 schema, builds a validated model, then executes. It never touches tool internals.
@@ -144,7 +201,7 @@ called once per registry.
 
 ---
 
-## 4. Unimplemented classifier path
+## 5. Unimplemented classifier path
 
 `TicketClassifier.classify` sends a prompt and then **discards** the response, raising
 `NotImplementedError`. It is not constructed by `main`, so this path is unreachable in
@@ -174,7 +231,7 @@ block, so the fix is a one-line change to call
 
 ---
 
-## 5. Structured output contract
+## 6. Structured output contract
 
 `LLMClient.structured` is generic over pydantic models and is the single place where
 model output becomes a typed value.
@@ -218,8 +275,13 @@ fix belonged in the prompt rather than in the transport.
 | `llm.py` | OpenRouter transport, plain and structured | Working |
 | `main.py` | Composition root, single ticket run | Working |
 | `domain/ticket.py` | Enums and pydantic models | Working |
+| `knowledge/document.py` | `KnowledgeDocument` schema | Working |
+| `knowledge/store.py` | In-memory document list | Working |
+| `knowledge/seed.py` | Hard-coded seed corpus | Working |
+| `knowledge/retriever.py` | Token-overlap search | Working, naive scoring |
 | `tools/base.py` | `Tool` ABC and `ToolResult` | Working |
 | `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
+| `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **unreachable from agent** |
 | `tools/registry.py` | `ToolRegistry` and default factory | Working |
 | `agent/agent.py` | `decide`, `execute`, `run` | Working; 2 of 3 actions placeholders |
 | `agent/tools.py` | Legacy `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
