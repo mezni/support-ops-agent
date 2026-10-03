@@ -25,12 +25,6 @@ class TicketStatus(StrEnum):
     ESCALATED = "escalated"
 
 
-class AgentAction(StrEnum):
-    DRAFT_RESPONSE = "draft_response"
-    CREATE_TICKET = "create_ticket"
-    ESCALATE = "escalate"
-
-
 class SupportTicket(BaseModel):
     id: str
     customer_id: str
@@ -55,6 +49,12 @@ class TicketClassification(BaseModel):
     category: TicketCategory
     priority: TicketPriority
     sentiment: str
+
+
+class AgentAction(StrEnum):
+    DRAFT_RESPONSE = "draft_response"
+    CREATE_TICKET = "create_ticket"
+    ESCALATE = "escalate"
 
 
 class AgentDecision(BaseModel):

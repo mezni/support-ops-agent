@@ -1,11 +1,15 @@
 from support_ops.agent.agent import SupportAgent
 from support_ops.domain.ticket import IncomingTicket
+from support_ops.tools.registry import create_default_registry
 
 from tests.agent.fakes import FakeLLM
 
 
 def test_agent_decides_and_executes() -> None:
-    agent = SupportAgent(FakeLLM())
+    agent = SupportAgent(
+        llm=FakeLLM(),
+        tools=create_default_registry(),
+    )
 
     ticket = IncomingTicket(
         id="T-001",
@@ -21,4 +25,4 @@ def test_agent_decides_and_executes() -> None:
     result = agent.execute(ticket, decision)
 
     assert result.success is True
-    assert "C-001" in result.message
+    assert result.data["customer_id"] == "C-001"

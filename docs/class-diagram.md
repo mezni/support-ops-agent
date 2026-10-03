@@ -215,6 +215,7 @@ design change rather than a documentation fix.
 ```python
 T = TypeVar("T", bound=BaseModel)
 
+
 def structured(self, user_message: str, output_model: type[T]) -> T: ...
 ```
 

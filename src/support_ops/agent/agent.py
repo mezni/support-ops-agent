@@ -1,15 +1,21 @@
-from support_ops.agent.tools import ToolResult, create_ticket
 from support_ops.domain.ticket import (
     AgentAction,
     AgentDecision,
     IncomingTicket,
 )
 from support_ops.llm import LLMClient
+from support_ops.tools.base import ToolResult
+from support_ops.tools.registry import ToolRegistry
 
 
 class SupportAgent:
-    def __init__(self, llm: LLMClient):
+    def __init__(
+        self,
+        llm: LLMClient,
+        tools: ToolRegistry,
+    ):
         self.llm = llm
+        self.tools = tools
 
     def decide(
         self,
@@ -30,13 +36,20 @@ Subject:
 Description:
 {ticket.description}
 
-Choose the most appropriate action:
+Choose one action:
 
 - draft_response
 - create_ticket
 - escalate
 
-Provide a short reason for your decision.
+Provide a short reason.
+
+Return JSON with exactly these fields:
+
+{{
+  "action": "draft_response|create_ticket|escalate",
+  "reason": "short explanation"
+}}
 """
 
         return self.llm.structured(
@@ -51,11 +64,15 @@ Provide a short reason for your decision.
     ) -> ToolResult | str:
 
         if decision.action == AgentAction.CREATE_TICKET:
-            return create_ticket(
+            tool = self.tools.get("create_ticket")
+
+            arguments = tool.argument_schema()(
                 customer_id=ticket.customer_id,
                 subject=ticket.subject,
                 description=ticket.description,
             )
+
+            return tool.execute(arguments)
 
         if decision.action == AgentAction.DRAFT_RESPONSE:
             return "Response drafting will be implemented next."
@@ -65,11 +82,11 @@ Provide a short reason for your decision.
 
         raise ValueError(f"Unsupported action: {decision.action}")
 
+    def run(
+        self,
+        ticket: IncomingTicket,
+    ) -> ToolResult | str:
 
-    def run(self, ticket: IncomingTicket) -> ToolResult | str:
         decision = self.decide(ticket)
 
-        return self.execute(
-            ticket,
-            decision,
-        )
+        return self.execute(ticket, decision)
