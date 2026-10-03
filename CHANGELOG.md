@@ -4,6 +4,7 @@
 
 | Version | Feature Domain | Key Objectives |
 |---|---|---|
+| 0.0.6 | Tool Registry & Documentation | Route agent actions through a pluggable tool registry; make the composition root explicit; bring both diagram documents up to date with the code |
 | 0.0.5 | Structured Output & Test Packaging | Return typed agent decisions via OpenRouter structured output; make `tests` an importable package so shared fakes can be reused |
 | 0.0.4 | Agent Domain & Documentation | Define the agent decision contract in the domain layer; document runtime behaviour with sequence diagrams |
 | 0.0.3 | Configuration, Packaging & LLM Provider | Make the project installable and importable from any directory; load `.env` from the project root; fail fast on missing OpenRouter credentials; default to a zero-cost OpenRouter model |
@@ -19,6 +20,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Project re-initialization complete.
 - Focus on implementing the phased roadmap starting from Phase 0.
+
+## [0.0.6] - 2026-10-02
+
+This release introduces a pluggable tool registry that agent actions dispatch through,
+makes `main` an explicit composition root, and brings both diagram documents in line
+with the code.
+
+### Added
+
+- `support_ops/tools/` package:
+  - `Tool` (ABC) declaring `name`, `description`, `execute`, and `argument_schema`.
+  - `ToolResult` (`BaseModel`) with `success`, `message`, and optional `data`.
+  - `ToolRegistry` with `register`, `get`, and `list`.
+  - `create_default_registry()` module-level factory registering `CreateTicketTool`.
+  - `CreateTicketInput` and `CreateTicketTool`, whose input fields carry `Field`
+    descriptions.
+- `SupportAgent.run(ticket)`, composing `decide` then `execute`.
+- `docs/class-diagram.md`: class diagrams for the full type graph, the tool layer, and
+  the domain layer, plus a module status table and known gaps.
+
+### Changed
+
+- `SupportAgent.execute` now resolves `create_ticket` through the injected
+  `ToolRegistry` and builds a validated `CreateTicketInput` from
+  `tool.argument_schema()`, instead of calling a module-level function directly.
+- `SupportAgent.__init__` now requires `tools: ToolRegistry`.
+- `main` builds the registry and agent explicitly, making it the composition root.
+- The `decide` prompt now states the expected JSON shape with an explicit
+  `Return JSON with exactly these fields` block, matching the pattern already used in
+  `classifier.py`.
+- `tests/agent/test_agent.py` constructs the agent with `create_default_registry()` and
+  asserts on `result.data["customer_id"]` rather than `result.message`, since
+  `CreateTicketTool` reports the customer in `data` and a constant ticket id in
+  `message`.
+- `docs/sequence-diagram.md` rewritten for the registry-based flow: full agent run, tool
+  dispatch detail, the structured output contract including its failure branches, and
+  the composition root.
+
+### Fixed
+
+- `NameError: name 'ToolRegistry' is not defined` on import of
+  `support_ops.tools.registry`. `create_default_registry` was indented inside the class
+  body, so its `-> ToolRegistry` return annotation was evaluated before the name was
+  bound. It is now a module-level function, matching the call site in `main`.
+- `ValidationError: Invalid JSON` from `SupportAgent.decide` against the live API. The
+  prompt asked only for "a short reason" and did not state the JSON contract, so
+  `poolside/laguna-s-2.1:free` replied with Markdown prose (`**Chosen action:**
+  escalate`). `response_format` alone does not constrain this model.
+
+### Known Issues
+
+- **Duplicate `ToolResult` types.** `agent/tools.py` still defines an unrelated
+  `@dataclass ToolResult` and a `create_ticket` function, while `tools/base.py` defines
+  the pydantic `ToolResult` actually in use. The two are different classes; nothing
+  imports `agent/tools.py` any more, so it is dead code that makes
+  `from support_ops.agent.tools import ToolResult` succeed with a different shape than
+  `from support_ops.tools.base import ToolResult`.
+- `TicketClassifier.classify` (`classifier.py:39`) still raises `NotImplementedError`
+  and still calls `llm.chat` rather than `llm.structured`. Its prompt is already
+  correct, so the fix is a one-line change. It is not constructed by `main`.
+- `SupportAgent.execute` is partial: only `CREATE_TICKET` invokes a tool.
+  `DRAFT_RESPONSE` and `ESCALATE` return placeholder strings, and the declared return
+  type is `ToolResult | str`, so callers must type-check before reading `.success`.
+- `CreateTicketTool` fabricates a constant ticket id `T-NEW-001` and persists nothing.
+- Tools are never advertised to the model. The `AgentAction` enum and the
+  `ToolRegistry` are maintained separately and can drift apart.
+- `poolside/laguna-s-2.1:free` selected `escalate` for every ticket tried, including
+  unambiguous duplicate-billing cases, so `main` usually prints a placeholder string
+  rather than exercising tool execution. Exercise `execute` with an explicit
+  `AgentDecision` to test dispatch independently of model judgement.
+- `tests/tools/` has no `__init__.py`, unlike `tests/agent/` and `tests/domain/`.
+  Collection works only because no other test module shares the basename
+  `test_create_ticket`; a duplicate basename elsewhere would cause an import mismatch.
+- `ruff check` reports 5 findings, 4 auto-fixable: unused `pydantic.Field` in
+  `domain/ticket.py`, unused `IncomingTicket` in `tests/domain/test_ticket.py`, unused
+  `result` local in `classifier.py`, and import sorting in `llm.py` and
+  `tests/agent/test_agent.py`.
 
 ## [0.0.5] - 2026-10-02
 
@@ -64,10 +142,9 @@ OpenRouter, and makes `tests` an importable package so test doubles can be share
 - `TicketClassifier.classify` (`classifier.py:39`) still raises
   `NotImplementedError` unconditionally and still calls `llm.chat` rather than
   `llm.structured`, so it is subject to the same failure above.
-- `docs/sequence-diagram.md` is now **stale**: it states that `SupportAgent.decide`
-  raises `NotImplementedError` and that only `execute` is functional. Both were true at
-  0.0.4 but no longer hold. The Mermaid syntax also remains unverified, as
-  `@mermaid-js/mermaid-cli` could not be installed.
+- `docs/sequence-diagram.md` was **stale** at this release: it stated that
+  `SupportAgent.decide` raises `NotImplementedError` and that only `execute` is
+  functional. Both were true at 0.0.4 but no longer hold. Corrected in 0.0.6.
 - `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
   `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
   `tests/domain/test_ticket.py`, and an unused `result` local in
@@ -99,10 +176,8 @@ the runtime with sequence diagrams.
 ### Known Issues
 
 - `TicketClassifier.classify` (`classifier.py:39`) still raises `NotImplementedError`
-  unconditionally. See 0.0.5 for the live-API structured output failure that will affect
+  unconditionally. See 0.0.6 for the live-API structured output failure that affected
   it once implemented.
-- The Mermaid diagrams in `docs/sequence-diagram.md` are unverified, because
-  `@mermaid-js/mermaid-cli` could not be installed. Syntax has been hand-checked only.
 - `ruff check` reports 3 pre-existing findings unrelated to this release: an unused
   `pydantic.Field` import in `domain/ticket.py`, an unused `IncomingTicket` import in
   `tests/domain/test_ticket.py`, and an unused `result` local in

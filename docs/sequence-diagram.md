@@ -1,12 +1,12 @@
 # Sequence Diagrams
 
-Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.3**.
+Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.6**.
 
 These describe **implemented** behaviour, not the target architecture in
-[roadmap.md](roadmap.md). Where a code path raises `NotImplementedError`, that is
-shown explicitly rather than drawn as a working step. Two components
-(`TicketClassifier`, `SupportAgent`) are not yet constructed by `main()`, so their
-diagrams are marked accordingly.
+[roadmap.md](roadmap.md). Where a code path raises `NotImplementedError`, that is shown
+explicitly rather than drawn as a working step.
+
+Companion to [class-diagram.md](class-diagram.md), which shows types and relationships.
 
 Rendered automatically by GitHub, GitLab, and any Mermaid-capable Markdown viewer.
 
@@ -27,12 +27,13 @@ sequenceDiagram
     participant EnvFile as .env at PROJECT_ROOT
     participant Validator as _require_credentials
     participant LLMClient as LLMClient
+    participant Registry as create_default_registry
     participant SDK as openai.OpenAI
 
     CLI->>Main: runpy invokes main
     Main->>Settings: Settings
     Settings->>EnvFile: read env_file absolute path
-    EnvFile-->>Settings: OPENROUTER_API_KEY, OPENROUTER_MODEL
+    EnvFile-->>Settings: OPENROUTER_API_KEY and OPENROUTER_MODEL
     Settings->>Validator: model_validator mode after
     alt any value empty
         Validator-->>CLI: ValidationError naming missing vars and .env path
@@ -44,131 +45,168 @@ sequenceDiagram
     LLMClient->>SDK: OpenAI api_key and base_url openrouter
     SDK-->>LLMClient: client ready
     LLMClient-->>Main: LLMClient
+    Main->>Registry: create_default_registry
+    Registry-->>Main: ToolRegistry holding CreateTicketTool
+    Main->>Main: build IncomingTicket T-001
 ```
 
 Key detail: `PROJECT_ROOT` is computed as `Path(__file__).resolve().parents[2]`, so
 `env_file` is absolute. An earlier relative `".env"` silently resolved against the cwd
 and produced empty credentials.
 
+`create_default_registry` is a module-level factory, **not** a method on `ToolRegistry`.
+When it was nested inside the class body, its `-> ToolRegistry` annotation was evaluated
+before the name existed, raising `NameError` at import.
+
 ---
 
-## 2. Inference path (fully working)
+## 2. Full agent run (the path `main` takes)
 
-The only end-to-end path that completes today. Invoked by `main()` and exercised by
-running the module.
+`SupportAgent.run` is `decide` followed by `execute`. This is the complete happy path.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant CLI as __main__
     participant Main as main.main
+    participant Agent as SupportAgent
     participant LLMClient as LLMClient
     participant SDK as openai.OpenAI
     participant API as OpenRouter API
-    participant Model as Model poolside laguna free
+    participant Registry as ToolRegistry
+    participant Tool as CreateTicketTool
 
-    CLI->>Main: main
-    Main->>LLMClient: chat user_message
-    LLMClient->>SDK: chat.completions.create model and messages
-    SDK->>API: HTTPS POST /api/v1/chat/completions
-    API->>Model: forward request
-    Model-->>API: completion
-    API-->>SDK: HTTP 200 choices
-    SDK-->>LLMClient: response object
-    LLMClient->>LLMClient: choices[0].message.content or empty string
-    LLMClient-->>Main: str
-    Main->>CLI: print response
+    Main->>Agent: run ticket
+    Agent->>LLMClient: decide ticket, structured prompt and AgentDecision
+    LLMClient->>SDK: chat.completions.parse response_format AgentDecision
+    SDK->>API: HTTPS request
+    API-->>SDK: JSON completion
+    SDK-->>LLMClient: parsed AgentDecision
+    LLMClient-->>Agent: AgentDecision
+    Note over Agent: action chosen by the model,<br/>not by dispatch logic
+    alt action equals CREATE_TICKET
+        Agent->>Registry: get create_ticket
+        Registry-->>Agent: CreateTicketTool
+        Agent->>Tool: argument_schema then build CreateTicketInput
+        Tool-->>Agent: validated CreateTicketInput
+        Agent->>Tool: execute arguments
+        Tool-->>Agent: ToolResult success and data
+        Agent-->>Main: ToolResult
+    else action equals DRAFT_RESPONSE
+        Agent-->>Main: placeholder string, not implemented
+    else action equals ESCALATE
+        Agent-->>Main: placeholder string, not implemented
+    end
+    Main->>Main: print result
 ```
+
+The prompt sent in step 2 must state the JSON shape explicitly. `response_format` alone
+does not constrain `poolside/laguna-s-2.1:free`, which otherwise replies with Markdown
+prose such as `**Chosen action:** escalate` and causes `ValidationError: Invalid JSON`.
+Adding a `Return JSON with exactly these fields` block fixed this.
 
 ---
 
-## 3. Agent tool dispatch (fully working)
+## 3. Tool dispatch detail
 
-`SupportAgent.execute` dispatches on `AgentDecision.action`. This is the path covered by
-`tests/agent/test_agent.py`, which injects a `FakeLLM` and bypasses `decide` entirely.
+The two-phase tool contract inside `execute`. The agent asks the tool for its input
+schema, builds a validated model, then executes. It never touches tool internals.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Caller as Test or caller
     participant Agent as SupportAgent
-    participant Decision as AgentDecision
-    participant Tools as agent.tools
-    participant Result as ToolResult
+    participant Registry as ToolRegistry
+    participant Tool as Tool instance
+    participant Input as CreateTicketInput
 
-    Caller->>Agent: execute ticket and decision
-    alt action equals CREATE_TICKET
-        Agent->>Tools: create_ticket customer_id subject description
-        Tools-->>Result: ToolResult success true and message
-        Result-->>Caller: ToolResult
-    else action equals DRAFT_RESPONSE
-        Agent-->>Caller: placeholder string, not implemented
-    else action equals ESCALATE
-        Agent-->>Caller: placeholder string, not implemented
-    else unknown action
-        Agent-->>Caller: ValueError
+    Agent->>Registry: get create_ticket
+    alt name not registered
+        Registry-->>Agent: ValueError Unknown tool
+    else name registered
+        Registry-->>Agent: Tool
+    end
+    Agent->>Tool: argument_schema
+    Tool-->>Agent: type CreateTicketInput
+    Agent->>Input: construct with customer_id subject description
+    alt required field missing
+        Input-->>Agent: ValidationError
+    else valid
+        Input-->>Agent: CreateTicketInput
+        Agent->>Tool: execute arguments
+        Tool-->>Agent: ToolResult success message data
     end
 ```
 
+`ToolRegistry.get` converts `KeyError` to `ValueError` with `from None`, so callers see
+one exception type for both unknown-tool and duplicate-tool. `register` raises
+`ValueError` on a duplicate name, which is why `create_default_registry` can only be
+called once per registry.
+
 ---
 
-## 4. Unimplemented LLM decision paths
+## 4. Unimplemented classifier path
 
-Both `TicketClassifier.classify` and `SupportAgent.decide` send a prompt to the model
-and then **discard the response**, raising `NotImplementedError`. Dashed arrows mark the
-missing parsing step.
+`TicketClassifier.classify` sends a prompt and then **discards** the response, raising
+`NotImplementedError`. It is not constructed by `main`, so this path is unreachable in
+normal operation.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Agent as Classifier.classify or Agent.decide
+    participant Caller as Unreachable caller
+    participant Classifier as TicketClassifier
     participant LLMClient as LLMClient
     participant API as OpenRouter API
-    participant Missing as Structured parsing NOT IMPLEMENTED
+    participant Missing as Parsing NOT IMPLEMENTED
 
-    Agent->>LLMClient: chat prompt requesting JSON
+    Caller->>Classifier: classify ticket
+    Classifier->>LLMClient: chat prompt requesting JSON
     LLMClient->>API: request
-    API-->>LLMClient: raw JSON string
-    LLMClient-->>Agent: str
-    Note over Agent,Missing: result is captured then discarded.<br/>classifier.py:39 raises unconditionally.<br/>agent.py:50 raises unconditionally.
-    Agent-->>Missing: NotImplementedError
+    API-->>LLMClient: JSON string
+    LLMClient-->>Classifier: str
+    Note over Classifier,Missing: result captured then discarded.<br/>Uses llm.chat, not llm.structured.
+    Classifier-->>Missing: NotImplementedError
 ```
 
-The agent prompt at `agent.py:18-44` already requests the correct shape, and
-`AgentDecision` parses it correctly when validated directly:
-
-```
-{ "action": "create_ticket", "reason": "..." }
-```
-
-So the remaining work is confined to parsing the model string into `AgentDecision` and
-`TicketClassification` rather than raising.
+The prompt here already contains a correct `Return JSON with exactly these fields`
+block, so the fix is a one-line change to call
+`self.llm.structured(prompt, TicketClassification)` instead of `self.llm.chat(prompt)`.
 
 ---
 
-## Wiring gap
+## 5. Structured output contract
 
-`main()` constructs only `Settings` and `LLMClient`. Neither `TicketClassifier` nor
-`SupportAgent` is instantiated anywhere in `src/`, and no module imports them outside
-their own tests. The intended composition, per roadmap Phase 3 and 4, is roughly:
+`LLMClient.structured` is generic over pydantic models and is the single place where
+model output becomes a typed value.
 
 ```mermaid
 sequenceDiagram
-    participant Main as main
-    participant Classifier as TicketClassifier
-    participant Agent as SupportAgent
-    participant Tools as agent.tools
+    autonumber
+    participant Caller as Agent or Classifier
+    participant LLMClient as LLMClient
+    participant SDK as openai.OpenAI
+    participant API as OpenRouter API
 
-    Main->>Classifier: classify ticket
-    Classifier-->>Main: TicketClassification
-    Main->>Agent: decide ticket
-    Note over Agent: blocked, NotImplementedError at agent.py:50
-    Agent->>Tools: execute action
-    Tools-->>Main: ToolResult
+    Caller->>LLMClient: structured prompt and output_model type T
+    LLMClient->>SDK: chat.completions.parse model messages response_format T
+    SDK->>API: HTTPS request
+    alt model returns valid JSON
+        API-->>SDK: content matching schema
+        SDK-->>LLMClient: message.parsed instance of T
+        LLMClient-->>Caller: T
+    else model returns prose or malformed JSON
+        API-->>SDK: non JSON content
+        SDK-->>LLMClient: ValidationError Invalid JSON
+        LLMClient-->>Caller: ValidationError propagates
+    else no parsed object
+        SDK-->>LLMClient: message.parsed is None
+        LLMClient-->>Caller: ValueError Model returned no structured output
+    end
 ```
 
-This composition does not exist yet and is drawn dashed in intent only — it will not run
-until `decide` is implemented.
+The middle branch is the one that bit this project: the failure surfaced as a pydantic
+`ValidationError` from inside the OpenAI SDK, not as an application-level error, so the
+fix belonged in the prompt rather than in the transport.
 
 ---
 
@@ -177,10 +215,12 @@ until `decide` is implemented.
 | Module | Responsibility | Status |
 | --- | --- | --- |
 | `config.py` | Resolve settings, validate credentials | Working |
-| `llm.py` | OpenRouter transport via OpenAI SDK | Working |
-| `main.py` | Entry point, single-shot chat | Working |
-| `agent/tools.py` | `ToolResult`, `create_ticket` stub | Working |
-| `agent/agent.py` | `execute` dispatch | Working |
-| `agent/agent.py` | `decide` LLM parsing | Raises `NotImplementedError` |
-| `classifier.py` | `classify` LLM parsing | Raises `NotImplementedError` |
+| `llm.py` | OpenRouter transport, plain and structured | Working |
+| `main.py` | Composition root, single ticket run | Working |
 | `domain/ticket.py` | Enums and pydantic models | Working |
+| `tools/base.py` | `Tool` ABC and `ToolResult` | Working |
+| `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
+| `tools/registry.py` | `ToolRegistry` and default factory | Working |
+| `agent/agent.py` | `decide`, `execute`, `run` | Working; 2 of 3 actions placeholders |
+| `agent/tools.py` | Legacy `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
+| `classifier.py` | `classify` LLM parsing | Raises `NotImplementedError` |

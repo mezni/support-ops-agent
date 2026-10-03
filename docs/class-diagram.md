@@ -1,10 +1,10 @@
 # Class Diagram
 
-Static structure of `support-ops-agent` as it exists at version **0.0.5**.
+Static structure of `support-ops-agent` as it exists at version **0.0.6**.
 
 Companion to [sequence-diagram.md](sequence-diagram.md), which shows runtime ordering.
 This document shows types, members, and relationships. Implemented and unimplemented
-members are distinguished in the [status table](#module-status).
+members are distinguished in the [module status](#module-status).
 
 ---
 
@@ -28,21 +28,53 @@ classDiagram
         +structured(user_message, output_model) T
     }
 
+    class SupportAgent {
+        -LLMClient llm
+        -ToolRegistry tools
+        +decide(ticket) AgentDecision
+        +execute(ticket, decision) ToolResult or str
+        +run(ticket) ToolResult or str
+    }
+
     class TicketClassifier {
         -LLMClient llm
         +classify(ticket) TicketClassification
     }
 
-    class SupportAgent {
-        -LLMClient llm
-        +decide(ticket) AgentDecision
-        +execute(ticket, decision) ToolResult or str
+    class ToolRegistry {
+        -dict _tools
+        +register(tool) None
+        +get(name) Tool
+        +list() Tool
+    }
+
+    class Tool {
+        <<abstract>>
+        +str name
+        +str description
+        +execute(arguments) ToolResult
+        +argument_schema() type
+    }
+
+    class CreateTicketTool {
+        +str name
+        +str description
+        +execute(arguments) ToolResult
+        +argument_schema() type
+    }
+
+    class CreateTicketInput {
+        <<PydanticModel>>
+        +str customer_id
+        +str subject
+        +str description
     }
 
     class ToolResult {
-        <<dataclass>>
+        <<PydanticModel>>
         +bool success
         +str message
+        +dict data
     }
 
     class IncomingTicket {
@@ -119,9 +151,14 @@ classDiagram
     LLMClient *-- OpenAI : client
     TicketClassifier o-- LLMClient : llm
     SupportAgent o-- LLMClient : llm
+    SupportAgent o-- ToolRegistry : tools
+    ToolRegistry o-- Tool : _tools
+    Tool <|-- CreateTicketTool
+    CreateTicketTool ..> CreateTicketInput : argument_schema
+    CreateTicketTool ..> ToolResult : returns
+    SupportAgent ..> ToolResult : create_ticket returns
     SupportAgent ..> AgentDecision : decide returns
     SupportAgent ..> IncomingTicket : consumes
-    SupportAgent ..> ToolResult : create_ticket returns
     AgentDecision --> AgentAction : action
     TicketClassification --> TicketCategory : category
     TicketClassification --> TicketPriority : priority
@@ -130,12 +167,94 @@ classDiagram
     SupportTicket --> TicketStatus : status
 ```
 
-`o--` is aggregation: the consumer holds a reference passed in by the caller.
-`*--` is composition: the owner creates the part and it cannot exist without it.
+`*--` is composition: the owner creates the part. `o--` is aggregation: the consumer
+holds a caller-supplied reference. `..>` is a dependency with no stored reference.
+
+`SupportAgent` holds `ToolRegistry` by aggregation rather than composition because the
+registry is injected, which is what lets tests substitute tooling.
 
 ---
 
-## Domain layer in detail
+## Tool layer
+
+```mermaid
+classDiagram
+    direction LR
+
+    class ABC {
+        <<stdlib abc>>
+        +abstractmethod
+    }
+
+    class BaseModel {
+        <<pydantic>>
+        +model_validate(data)
+        +model_dump_json() str
+    }
+
+    class Tool {
+        <<abstract>>
+        +str name
+        +str description
+        +execute(arguments) ToolResult
+        +argument_schema() type
+    }
+
+    class CreateTicketTool {
+        +str name
+        +str description
+        +execute(arguments) ToolResult
+        +argument_schema() type
+    }
+
+    class ToolRegistry {
+        -dict _tools
+        +register(tool) None
+        +get(name) Tool
+        +list() Tool
+    }
+
+    ABC <|-- Tool
+    Tool <|-- CreateTicketTool
+    BaseModel <|-- ToolResult
+    BaseModel <|-- CreateTicketInput
+    ToolRegistry o-- Tool
+```
+
+### The two-phase tool contract
+
+`SupportAgent.execute` never touches a tool's internals. It asks the tool for its input
+schema, builds a validated model from the ticket, then executes:
+
+```python
+tool = self.tools.get("create_ticket")
+arguments = tool.argument_schema()(
+    customer_id=ticket.customer_id,
+    subject=ticket.subject,
+    description=ticket.description,
+)
+return tool.execute(arguments)
+```
+
+So `argument_schema()` returning `CreateTicketInput` serves double duty: it types the
+arguments, and it validates them through pydantic before the tool runs. Missing
+required fields fail at the call site rather than inside tool logic.
+
+`ToolRegistry.get` translates `KeyError` into `ValueError` with `from None`, so callers
+see one exception type for "unknown tool" and "duplicate tool" regardless of which
+dict operation failed.
+
+### `ToolResult` is not a discriminated union
+
+`execute` is declared `-> ToolResult | str`. Only `CREATE_TICKET` returns a
+`ToolResult`; `DRAFT_RESPONSE` and `ESCALATE` return bare placeholder strings. Callers
+must type-check before touching `.success` or `.data`, which is why `main()` can
+legitimately print either a string or a pydantic model. A discriminated union or a
+consistent envelope would remove the need for that check.
+
+---
+
+## Domain layer
 
 All four enums subclass `StrEnum`, so members compare equal to their string values.
 That is what lets `response_format` accept `"create_ticket"` from a JSON payload and
@@ -147,8 +266,6 @@ classDiagram
 
     class BaseModel {
         <<pydantic>>
-        +model_validate(data)
-        +model_dump_json() str
     }
 
     class StrEnum {
@@ -166,21 +283,43 @@ classDiagram
     StrEnum <|-- AgentAction
 ```
 
-### Model responsibilities
-
 | Type | Purpose |
 | --- | --- |
 | `IncomingTicket` | Raw ticket as received, before classification |
 | `SupportTicket` | Classified, tracked ticket with lifecycle `status` |
-| `TicketClassification` | Output of `TicketClassifier.classify` |
+| `TicketClassification` | Intended output of `TicketClassifier.classify` |
 | `AgentDecision` | Output of `SupportAgent.decide`, consumed by `execute` |
 
 `IncomingTicket` and `SupportTicket` share four identical fields (`id`, `customer_id`,
 `subject`, `description`) but are **not** related by inheritance. The duplication is
 deliberate: incoming tickets are untrusted input parsed before validation, while
 `SupportTicket` requires `category` and `priority`. Factoring the shared fields into a
-base model would couple the trusted and untrusted shapes, so the overlap is left
-explicit. Worth revisiting if a third ticket shape appears.
+base model would couple the trusted and untrusted shapes. Worth revisiting if a third
+ticket shape appears.
+
+---
+
+## Duplicate `ToolResult` types
+
+There are currently **two** distinct classes named `ToolResult`:
+
+| Location | Kind | Fields | Used by |
+| --- | --- | --- | --- |
+| `tools/base.py` | `pydantic.BaseModel` | `success`, `message`, `data` | `Tool`, `CreateTicketTool`, `SupportAgent` |
+| `agent/tools.py` | `@dataclass` | `success`, `message` | nothing |
+
+They are unrelated classes; `tools.base.ToolResult is agent.tools.ToolResult` is
+`False`. `agent/tools.py` is **dead code** — nothing in `src/` or `tests/` imports it
+after the tool registry refactor. It still exposes a `create_ticket` function, so both
+these imports would succeed and return differently-shaped objects:
+
+```python
+from support_ops.tools.base import ToolResult        # pydantic, has .data
+from support_ops.agent.tools import ToolResult       # dataclass, no .data
+```
+
+Deleting `agent/tools.py` would remove the ambiguity. It is kept in this diagram only
+to document the duplication.
 
 ---
 
@@ -194,17 +333,16 @@ class FakeLLM:
         return AgentDecision(...)
 ```
 
-`SupportAgent.__init__` annotates `llm: LLMClient`, so a static type checker will flag
-`SupportAgent(FakeLLM())` even though it works at runtime. The coupling is structural,
-not nominal. Two consequences:
+`SupportAgent.__init__` annotates `llm: LLMClient`, so a static type checker flags
+`SupportAgent(llm=FakeLLM(), ...)` even though it works at runtime. The coupling is
+structural, not nominal. Two consequences:
 
-1. `FakeLLM` must implement every method the agent calls. Renaming `chat` or
-   `structured` on `LLMClient` will not fail at import, only when the agent path runs.
+1. `FakeLLM` must implement every method the agent calls. Renaming `structured` on
+   `LLMClient` will not fail at import, only when the agent path runs.
 2. There is no shared interface or `Protocol` to catch drift at type-check time.
 
-Introducing a `SupportsStructuredLLM` `Protocol` would make the contract explicit and
-let the fake satisfy it without a fake base class. Not done here because it is a
-design change rather than a documentation fix.
+A `SupportsStructuredLLM` `Protocol` would make the contract explicit. Not done here
+because it is a design change rather than a documentation fix.
 
 ---
 
@@ -215,13 +353,12 @@ design change rather than a documentation fix.
 ```python
 T = TypeVar("T", bound=BaseModel)
 
-
 def structured(self, user_message: str, output_model: type[T]) -> T: ...
 ```
 
-The return type tracks the model passed in, so `structured(prompt, AgentDecision)`
-is typed as `AgentDecision` rather than `BaseModel`. This is what allows
-`SupportAgent.decide` to declare `-> AgentDecision` without a cast.
+The return type tracks the model passed in, so `structured(prompt, AgentDecision)` is
+typed as `AgentDecision` rather than `BaseModel`. That is what lets `SupportAgent.decide`
+declare `-> AgentDecision` with no cast.
 
 ---
 
@@ -230,12 +367,14 @@ is typed as `AgentDecision` rather than `BaseModel`. This is what allows
 | Module | Types | Status |
 | --- | --- | --- |
 | `config.py` | `Settings` | Working |
-| `llm.py` | `LLMClient` | Working, but `structured` fails against the current default model |
-| `main.py` | module function only | Working; does not construct `SupportAgent` or `TicketClassifier` |
+| `llm.py` | `LLMClient` | Working against the current default model |
 | `domain/ticket.py` | 4 enums, 4 models | Working |
-| `agent/tools.py` | `ToolResult`, `create_ticket` | Working, stubbed persistence |
-| `agent/agent.py` | `SupportAgent.decide` | Implemented, fails live |
-| `agent/agent.py` | `SupportAgent.execute` | Working for `CREATE_TICKET`; other actions return placeholder strings |
+| `tools/base.py` | `Tool` (ABC), `ToolResult` | Working |
+| `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
+| `tools/registry.py` | `ToolRegistry`, `create_default_registry` | Working |
+| `agent/agent.py` | `decide`, `execute`, `run` | Working; 2 of 3 actions are placeholders |
+| `main.py` | module function only | Working composition root |
+| `agent/tools.py` | `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
 | `classifier.py` | `TicketClassifier.classify` | Raises `NotImplementedError` |
 | `tests/agent/fakes.py` | `FakeLLM` | Test only |
 
@@ -243,17 +382,18 @@ is typed as `AgentDecision` rather than `BaseModel`. This is what allows
 
 ## Known gaps
 
-- **`TicketClassifier.classify` is unimplemented.** It calls `llm.chat` and discards
-  the result, raising `NotImplementedError`. It should call `llm.structured` with
-  `TicketClassification`; until then the class exists only as a type.
-- **`SupportAgent.decide` fails against the live API.** The prompt in `agent.py` does
-  not state the expected JSON shape, so `poolside/laguna-s-2.1:free` returns Markdown
-  prose and `chat.completions.parse` raises `ValidationError`. Adding an explicit
-  `Return JSON with exactly these fields` block made the same call succeed. Unit tests
-  do not catch this because `FakeLLM` bypasses the transport.
-- **`SupportAgent.execute` is partial.** `CREATE_TICKET` calls `create_ticket`;
-  `DRAFT_RESPONSE` and `ESCALATE` return placeholder strings, and `create_ticket` does
-  not persist anything.
-- **No composition root.** `main()` builds only `Settings` and `LLMClient`. The wiring
-  in roadmap Phase 3 and 4 does not exist.
+- **`TicketClassifier.classify` is unimplemented.** It calls `llm.chat`, discards the
+  result, and raises `NotImplementedError`. It should call `llm.structured` with
+  `TicketClassification`, which is the pattern `SupportAgent.decide` already uses.
+- **Duplicate `ToolResult`.** See above; `agent/tools.py` should be deleted.
+- **`execute` is partial.** `CREATE_TICKET` invokes a real tool; `DRAFT_RESPONSE` and
+  `ESCALATE` return placeholder strings, and `CreateTicketTool` fabricates a constant
+  ticket id `T-NEW-001` rather than persisting anything.
+- **Model choice drives the demo.** `poolside/laguna-s-2.1:free` selected `escalate` for
+  every ticket tried, including unambiguous duplicate-billing cases. `main()` therefore
+  usually prints a placeholder string rather than exercising tool execution. Test
+  `execute` with an explicit `AgentDecision` to exercise dispatch independently of
+  model judgement.
+- **No tool-exposure to the model.** Tools are registered but never advertised to the
+  LLM; the action enum and the tool registry are maintained separately and can drift.
 - **Unused import.** `domain/ticket.py` imports `pydantic.Field` without using it.
