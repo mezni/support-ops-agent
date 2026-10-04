@@ -4,8 +4,10 @@ from support_ops.domain.ticket import (
     AgentDecision,
     IncomingTicket,
 )
+from support_ops.guardrails.authorization import AuthorizationService
 from support_ops.llm import LLMClient
 from support_ops.memory.manager import MemoryManager
+from support_ops.observability.tracer import Tracer
 from support_ops.tools.registry import ToolRegistry
 
 
@@ -15,10 +17,16 @@ class SupportAgent:
         llm: LLMClient,
         tools: ToolRegistry,
         memory: MemoryManager,
+        authorization: AuthorizationService,
+        tracer: Tracer,
+        max_iterations: int = 5,
     ) -> None:
         self.llm = llm
         self.tools = tools
         self.memory = memory
+        self.authorization = authorization
+        self.tracer = tracer
+        self.max_iterations = max_iterations
 
     def build_context(
         self,
@@ -150,7 +158,7 @@ Return JSON with exactly these fields:
             content=ticket.description,
         )
 
-        state = AgentState(ticket=ticket)
+        state = AgentState(ticket=ticket, max_iterations=self.max_iterations)
 
         while state.status == AgentStatus.RUNNING:
             state.iteration += 1

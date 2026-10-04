@@ -1,43 +1,20 @@
-from support_ops.agent.agent import SupportAgent
+import uvicorn
+
+from support_ops.api.app import create_app
 from support_ops.config import Settings
-from support_ops.domain.ticket import IncomingTicket
-from support_ops.knowledge.retriever import KnowledgeRetriever
-from support_ops.knowledge.seed import default_documents
-from support_ops.knowledge.store import KnowledgeStore
-from support_ops.llm import LLMClient
-from support_ops.memory.manager import MemoryManager
-from support_ops.tools.registry import create_default_registry
+from support_ops.container import create_application
 
 
 def main() -> None:
     settings = Settings()
+    application = create_application(settings)
+    app = create_app(application)
 
-    llm = LLMClient(settings)
-
-    store = KnowledgeStore(default_documents())
-
-    retriever = KnowledgeRetriever(store)
-
-    tools = create_default_registry(retriever)
-
-    memory = MemoryManager()
-
-    agent = SupportAgent(
-        llm=llm,
-        tools=tools,
-        memory=memory,
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
     )
-
-    ticket = IncomingTicket(
-        id="T-001",
-        customer_id="C-001",
-        subject="I was charged twice",
-        description=("I noticed two charges for my subscription."),
-    )
-
-    result = agent.run(ticket)
-
-    print(result)
 
 
 if __name__ == "__main__":

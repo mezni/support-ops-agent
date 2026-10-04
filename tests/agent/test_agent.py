@@ -8,9 +8,10 @@ from support_ops.domain.ticket import (
 from support_ops.knowledge.retriever import KnowledgeRetriever
 from support_ops.knowledge.seed import default_documents
 from support_ops.knowledge.store import KnowledgeStore
-from support_ops.memory.manager import MemoryManager
 from support_ops.tools.registry import create_default_registry
-from tests.agent.fakes import FakeLLM, ScriptedLLM
+from support_ops.guardrails.authorization import AuthorizationService
+from support_ops.observability.tracer import Tracer
+from tests.agent.fakes import ScriptedLLM
 
 
 def build_agent(llm) -> SupportAgent:
@@ -20,6 +21,9 @@ def build_agent(llm) -> SupportAgent:
         llm=llm,
         tools=create_default_registry(retriever),
         memory=MemoryManager(),
+        authorization=AuthorizationService(),
+        tracer=Tracer(),
+        max_iterations=5,
     )
 
 
@@ -74,7 +78,9 @@ def test_run_executes_tool_and_keeps_going() -> None:
     assert execution.success is True
     assert execution.data is not None
 
-    assert state.final_response == ("Use the reset link on the login page.")
+    assert state.final_response == (
+        "Use the reset link on the login page."
+    )
 
 
 def test_tool_result_reaches_next_prompt() -> None:
@@ -120,7 +126,7 @@ def test_customer_memory_reaches_prompt() -> None:
     )
 
     agent = SupportAgent(
-        llm=llm,
+        llm=FakeLLM(),
         tools=create_default_registry(retriever),
         memory=memory,
     )
@@ -216,7 +222,11 @@ def test_ticket_is_recorded_once_per_run() -> None:
 
     messages = agent.memory.get_conversation()
 
-    user_messages = [message for message in messages if message.role == "user"]
+    user_messages = [
+        message
+        for message in messages
+        if message.role == "user"
+    ]
 
     assert len(user_messages) == 1
 
