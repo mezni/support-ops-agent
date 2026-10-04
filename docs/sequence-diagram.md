@@ -165,7 +165,7 @@ Two consequences of doing the write inside `decide`:
 1. **Memory is never bounded.** `ShortTermMemory` has no eviction and no maximum length,
    so the buffer grows with recorded messages. Roadmap Phase 6 specifies "Last 5 exchanges".
 
-The interpolated context appears in the prompt as Python `repr`, not JSON:
+The customer memory block is serialized with `model_dump_json()` (so it is valid JSON), but other primitive values may be interpolated directly; so the customer block is valid JSON.
 
 ```
 Customer facts:
