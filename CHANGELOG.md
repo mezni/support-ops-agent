@@ -78,16 +78,15 @@ for regressions later.
 - **`LongTermMemory.get` mutates on read.** A getter inserts an empty `CustomerMemory`
   for an unseen customer. Since `decide` calls `get_customer` for every ticket, the
   first ticket from any new customer creates a record as a side effect of reading it.
-  There is no way to ask whether a customer is known without creating them, so unknown
-  and known-but-empty are indistinguishable and both render as `{}`.
+  There is no way to ask "do I know this customer?" without creating them, so unknown
+  and known-but-empty are indistinguishable, and both render as `{}`.
 - **`updated_at` does not track modification.** It is set once at construction and never
   refreshed, so it records creation time rather than last modification.
 - **`ShortTermMemory` is unbounded.** There is no eviction and no maximum length, so the
-  buffer grows with every recorded message. Roadmap Phase 6 specifies "Last 5
-  exchanges".
+  buffer grows with every recorded message. Roadmap Phase 6 specifies "Last 5 exchanges".
 - **Memory context reaches the model as Python `repr`, not JSON.** `decide` interpolates
-  the fields directly into an f-string, so the prompt contains `{'plan': 'premium'}`
-  with single quotes. Models generally handle this, but `json.dumps` would emit a valid
+  the fields directly into an f-string, so the prompt contains `{'plan': 'premium'}` with
+  single quotes. Models generally handle this, but `json.dumps` would emit a valid
   literal.
 - **Customer memory is never populated in the running system.** `remember_fact` and
   `remember_ticket` are only exercised by tests. Nothing extracts facts or previous
@@ -102,7 +101,8 @@ for regressions later.
 - **`memory/` uses relative imports** where every other package uses absolute
   `from support_ops.x import y`. Not incorrect, but inconsistent.
 
-## [0.0.7] - 2026-10-02
+---
+## [0.0.9] - 2026-10-04
 
 This release adds a knowledge retrieval layer and a second tool that searches it, and
 corrects the tool contract so both tools are actually constrained by `Tool`.

@@ -49,6 +49,40 @@ classDiagram
         +str error
     }
 
+    class AgentStatus {
+        <<Enum>>
+        RUNNING
+        COMPLETED
+        FAILED
+        MAX_ITERATIONS
+    }
+
+    class AgentAction {
+        <<StrEnum>>
+        SEARCH_KNOWLEDGE_BASE
+        DRAFT_RESPONSE
+        CREATE_TICKET
+        ESCALATE
+    }
+
+    class AgentDecision {
+        <<PydanticModel>>
+        +AgentAction action
+        +str reason
+        +str tool_name
+        +dict tool_arguments
+        +str response
+    }
+
+    class ToolExecution {
+        <<PydanticModel>>
+        +str tool_name
+        +dict arguments
+        +bool success
+        +str result
+        +dict data
+    }
+
     class MemoryManager {
         -ShortTermMemory short_term
         -LongTermMemory long_term

@@ -342,7 +342,8 @@ fix belonged in the prompt rather than in the transport.
 | `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
 | `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **reachable** |
 | `tools/registry.py` | `ToolRegistry` and default factory | Working |
-| `agent/agent.py` | `decide`, `execute`, `run`; reads and writes memory | Working; 2 of 3 actions placeholders |
+| `agent/state.py` | `AgentState`, `AgentStatus`, `ToolExecution`, `ToolCall` | Working |
+| `agent/agent.py` | `build_context`, `decide`, `execute_decision`, `run` | Working loop-based agent; search_knowledge_base reachable |
 | `agent/tools.py` | Legacy `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
 | `memory/models.py` | `ConversationMessage`, `CustomerMemory` | Working |
 | `memory/short_term.py` | In-process message buffer | Working, unbounded |
@@ -356,7 +357,7 @@ fix belonged in the prompt rather than in the transport.
 
 - `docs/class-diagram.md` for the static structure, including the memory layer types and
   their behavioural traps.
-- `CHANGELOG.md` for what changed in 0.0.8.
+- `CHANGELOG.md` for what changed in 0.0.9.
 - [roadmap.md](roadmap.md) for the target architecture. The memory layer documented here
   is Phase 2, and it is behind the roadmap in three respects: the store is per-process
   rather than SQLite, `ShortTermMemory` is unbounded rather than "Last 5 exchanges", and
