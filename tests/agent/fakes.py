@@ -17,7 +17,11 @@ def get_fake_decision():
             action="create_ticket",
             reason="The issue requires investigation.",
             tool_name="create_ticket",
-            tool_arguments={"customer_id": "C-001", "subject": "test", "description": "test"},
+            tool_arguments={
+                "customer_id": "C-001",
+                "subject": "test",
+                "description": "test",
+            },
         )
     return _agent_decision
 

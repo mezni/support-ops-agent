@@ -30,7 +30,11 @@ class FakeLLM:
             action="create_ticket",
             reason="The issue requires investigation.",
             tool_name="create_ticket",
-            tool_arguments={"customer_id": "C-001", "subject": "test", "description": "test"},
+            tool_arguments={
+                "customer_id": "C-001",
+                "subject": "test",
+                "description": "test",
+            },
         )
 
     def structured(self, message, output_model):
@@ -127,9 +131,7 @@ def test_run_executes_tool_and_keeps_going() -> None:
     assert agent.tool_calls[0].success is True
     assert agent.tool_calls[0].data is not None
 
-    assert agent.final_response == (
-        "Use the reset link on the login page."
-    )
+    assert agent.final_response == ("Use the reset link on the login page.")
 
 
 def test_tool_result_reaches_next_prompt() -> None:
@@ -161,7 +163,9 @@ def test_tool_result_reaches_next_prompt() -> None:
 
 def test_customer_memory_reaches_prompt() -> None:
     from support_ops.memory.models import CustomerMemory
-    from support_ops.persistence.repositories.customer_memory import CustomerMemoryRepository
+    from support_ops.persistence.repositories.customer_memory import (
+        CustomerMemoryRepository,
+    )
     from support_ops.persistence.database import Database
     from support_ops.persistence.models import initialize_database
 
@@ -278,7 +282,7 @@ def test_ticket_is_recorded_once_per_run() -> None:
     user_messages = [
         message
         for message in agent._events
-        if hasattr(message, 'event_type') and hasattr(message, 'data')
+        if hasattr(message, "event_type") and hasattr(message, "data")
     ]
 
     # Just check that events were recorded
@@ -292,4 +296,6 @@ def test_decide_takes_state() -> None:
 
     decision = agent.decide(state)
 
-    assert agent.status == "COMPLETED"  # create_ticket leads to COMPLETED after max_iterations
+    assert (
+        agent.status == "COMPLETED"
+    )  # create_ticket leads to COMPLETED after max_iterations

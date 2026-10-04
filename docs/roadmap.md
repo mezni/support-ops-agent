@@ -624,6 +624,192 @@ async def health():
 
 ---
 
+## Phase 13 — Application Layer & API
+
+### 13.1 Add the application package
+
+Create the `src/support_ops/` structure:
+
+```
+src/support_ops/
+├── application/
+│   ├── __init__.py
+│   ├── models.py
+│   └── service.py
+│
+└── api/
+    ├── __init__.py
+    ├── models.py
+    └── routes.py
+```
+
+### 13.2 Application request model
+
+Create `src/support_ops/application/models.py` with `ProcessTicketRequest` and `ProcessTicketResponse` Pydantic models.
+
+### 13.3 Create the application service
+
+Create `src/support_ops/application/service.py` with `SupportApplication` class that orchestrates the use case `ProcessSupportTicket`, handling `IncomingTicket` through the `SupportAgent` and returning `ProcessTicketResponse`.
+
+### 13.4 Why have an application service?
+
+Without it, HTTP routes would contain all agent logic making the system difficult to test and reuse. The application service owns the use case, decoupling it from the transport layer.
+
+### 13.5 Add FastAPI
+
+Install `uv add fastapi uvicorn`. FastAPI serves as the transport layer, not embedded within the agent.
+
+### 13.6 API models
+
+Create `src/support_ops/api/models.py` with `TicketRequest` and `TicketResponse` transport models, kept separate from application models for API evolution freedom.
+
+### 13.7 Create the API route
+
+Create `src/support_ops/api/routes.py` with `create_router()` function that defines the `/tickets/process` POST endpoint and a `/health` GET endpoint, using `SupportApplication` to process tickets.
+
+### 13.8 Create the API application
+
+Create `src/support_ops/api/app.py` with `create_app()` function that FastAPI application and includes the router.
+
+### 13.9 Don't construct everything inside the route
+
+Avoid constructing LLM, database, memory, tools, etc. inside route handlers. Instead, use a composition root.
+
+### 13.10 Create the application container
+
+Create `src/support_ops/container.py` with `create_application(settings: Settings) -> SupportApplication` function that assembles all dependencies (LLM, memory, knowledge, tools, guardrails, tracer, persistence) and returns a `SupportApplication`.
+
+### 13.11 Add database configuration
+
+Update `src/support_ops/config.py` with `database_path: str = "data/support_ops.db"` and `max_agent_iterations: int = 5` in the `Settings` model.
+
+### 13.12 Create the server entry point
+
+Update `src/support_ops/main.py` as a small entry point that creates settings, application, and FastAPI app, then starts uvicorn:
+
+```python
+import uvicorn
+
+from support_ops.api.app import create_app
+from support_ops.config import Settings
+from support_ops.container import create_application
+
+
+def main() -> None:
+    settings = Settings()
+    application = create_application(settings)
+    app = create_app(application)
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+    )
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Start with: `uv run python -m support_ops.main`
+
+### 13.13 Test the endpoint
+
+Send:
+
+```bash
+curl -X POST \
+  http://127.0.0.1:8000/tickets/process \
+  -H "Content-Type: application/json" \
+  -d '{
+    "customer_id": "C-001",
+    "subject": "Charged twice",
+    "description": "I was charged twice for my subscription."
+  }'
+```
+
+Response shape:
+
+```json
+{
+  "run_id": "...",
+  "status": "completed",
+  "response": "...",
+  "error": null,
+  "iterations": 2
+}
+```
+
+### 13.14 Add a health endpoint
+
+Add `@router.get("/health")` returning `{"status": "ok"}`, testable with `curl http://127.0.0.1:8000/health`.
+
+### 13.15 The architecture is now properly layered
+
+The project now has a proper 3-layer architecture:
+
+```
+                    HTTP
+                     │
+                     ▼
+              ┌─────────────┐
+              │ API Layer   │
+              └──────┬──────┘
+                     │
+                     ▼
+          ┌─────────────────────┐
+          │ Application Layer   │
+          │                     │
+          │ ProcessTicket       │
+          └──────────┬──────────┘
+                     │
+                     ▼
+              ┌─────────────┐
+              │ Agent Layer │
+              └──────┬──────┘
+                     │
+        ┌────────────┼─────────────┐
+        ▼            ▼             ▼
+     Memory        Tools        Guardrails
+        │            │             │
+        ▼            ▼             ▼
+   Persistence   Knowledge     Authorization
+```
+
+### 13.16 Why this matters for agentic AI design
+
+Three concerns are now separated:
+
+- **Transport**: HTTP, CLI, message queue
+- **Application**: Process ticket, create ticket, retrieve run, get customer history
+- **Agent**: Reason, decide, use tools, observe, reason again
+
+The agent can be invoked by REST API, CLI, or background worker without changing the agent itself.
+
+### 13.17 Phase 13 result
+
+The project now includes all 17 phases:
+
+1. Domain
+2. Agent reasoning
+3. Orchestration
+4. Context
+5. Short-term memory
+6. Long-term memory
+7. Agent state
+8. Multi-step tool loop
+9. Tools
+10. Knowledge/RAG
+11. Guardrails
+12. Authorization
+13. Evaluation
+14. Observability
+15. Persistence
+16. Application layer
+17. HTTP API
+
+---
+
 ## The Learning Progression
 
 ```
@@ -652,9 +838,9 @@ Production Agentic System
 
 ## Roadmap
 
-See the full progression above, from Phase 0 (foundation) through Phase 11 (production runtime).
+See the full progression above, from Phase 0 (foundation) through Phase 13 (application layer & API).
 
-Each phase builds on the previous one, gradually transforming a simple LLM application into a production-grade agentic AI system that follows the 11-layer architecture.
+Each phase builds on the previous one, gradually transforming a simple LLM application into a production-grade agentic AI system that follows the 17-layer architecture.
 
 ---
 
@@ -671,4 +857,6 @@ Each phase builds on the previous one, gradually transforming a simple LLM appli
 - [ ] Phase 0: Set up project structure and dependencies
 - [ ] Phase 1: Basic LLM application
 - [ ] Phase 2: Structured domain with Pydantic models
-- [ ] Continue through all 11 phases
+- [ ] Continue through Phase 13: Application Layer & API
+- [ ] Phase 14: Configuration & Dependency Injection
+- [ ] Phase 15: Production RAG: Embeddings + Vector Search
