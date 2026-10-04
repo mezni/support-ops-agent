@@ -362,3 +362,44 @@ fix belonged in the prompt rather than in the transport.
   is Phase 2, and it is behind the roadmap in three respects: the store is per-process
   rather than SQLite, `ShortTermMemory` is unbounded rather than "Last 5 exchanges", and
   nothing populates long-term facts or previous tickets automatically.
+## 0.0.9 Evaluation Architecture
+
+Evaluation Dataset
+    │
+    ▼
+  Agent Run
+    │
+    ▼
+  Agent Output
+    │
+    ▼
+  Evaluator
+    │
+    ▼
+  Metrics
+    │
+    ▼
+ Evaluation Report
+
+The architecture enables engineering-level agent development:
+1. Build agent to run evaluation dataset
+2. Measure results and find failures
+3. Change prompt/tool/policy
+4. Rerun and compare
+5. Keep or reject change
+
+Component reference updates:
+- evaluation/ package: cases.py, metrics.py, runner.py, __init__.py
+- tests/evaluation/: 10 tests covering metrics and cases
+- EVALUATION_CASES: 4 golden tickets (duplicate_billing, account_locked, security_incident, general_question)
+- EvaluationMetrics: total/passed/accuracy property
+- calculate_accuracy(expected, actual): fraction of matching items
+- EvaluationRunner.run(cases): iterates cases, checks state.status == COMPLETED
+
+Evaluation should be separate from production logic:
+- Agent runtime lives in agent/agent.py
+- Evaluation runner is standalone, takes an agent argument
+- Production code should not import from tests/evaluation/
+
+Phase 10 architecture diagram:
+ticket → context + memory → agent state → LLM reasoning → decision → guardrails → tool registry → tools/knowledge, with evaluation runner tapping the agent output branch.

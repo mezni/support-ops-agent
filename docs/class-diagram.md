@@ -822,3 +822,35 @@ declare `-> AgentDecision` with no cast.
 - **`domain/ticket.py` cleanup.** The `AgentAction`/`AgentDecision` definitions were
   deduplicated; state types now live in `agent/state.py`. Any stale imports should be
   removed if they surface.
+
+
+## Evaluation Architecture
+
+- **`evaluation/` package** (new in 0.0.9):
+  - `cases.py` — `EvaluationCase` dataclass and golden dataset of 4 tickets
+  - `metrics.py` — `EvaluationMetrics` dataclass with `accuracy` property
+  - `runner.py` — `EvaluationRunner` that runs agent against cases
+  - `__init__.py` — package exports
+
+- **Golden dataset** (`EVALUATION_CASES`): 4 tickets covering duplicate billing,
+  account lockout, security incident, and general question, each with expected
+  category, priority, and action.
+
+- **Evaluation runner** (`EvaluationRunner.run(cases)`)**: iterates cases, runs
+  `agent.run(ticket)`, checks if `state.status == COMPLETED` and
+  `expected_action` was selected.
+
+- **Metric: accuracy** = `passed / total` via `calculate_accuracy(expected, actual)`.
+
+- **Test coverage**: `tests/evaluation/test_cases.py` (10 tests) and
+  `tests/evaluation/test_metrics.py` (3 tests) validate the architecture.
+
+- **Separation of concerns**: production agent (`agent/agent.py`) is decoupled from
+  evaluation logic; the runner takes an `agent` argument and uses `agent.run()`.
+
+- **Engineering loop**: evaluate → find failures → change prompt/tool/policy → rerun
+  — turning agent development into engineering rather than prompt guessing.
+
+- **Phase 10 architecture diagram**: ticket → context + memory → agent state → LLM
+  reasoning → decision → guardrails → tool registry → tools/knowledge, with
+  evaluation runner tapping the agent output branch.

@@ -422,3 +422,28 @@ implementation was later removed during the cleanup phase recorded in 0.0.1.
   - Workflow validation (`Add workflow validator`).
   - Dockerization (`Add docker`).
 - Updated documentation for MVP v1 (`Update docs for mvp v1`).
+
+## [0.0.9] - 2026-10-04 (evaluation architecture)
+
+This release adds the evaluation architecture for regression testing agent behavior.
+
+### Added
+
+- `support_ops/evaluation/` package:
+  - `__init__.py` — exports `EvaluationCase`, `EVALUATION_CASES`, `EvaluationMetrics`, `calculate_accuracy`, `EvaluationRunner`
+  - `cases.py` — `EvaluationCase` dataclass and golden dataset of 4 tickets (duplicate_billing, account_locked, security_incident, general_question)
+  - `metrics.py` — `EvaluationMetrics` dataclass with `total`, `passed`, `accuracy` property; `calculate_accuracy(expected, actual)` helper
+  - `runner.py` — `EvaluationRunner` class that runs `agent.run(ticket)` against cases and counts passed cases
+- `tests/evaluation/` package:
+  - `test_cases.py` — 7 tests: dataset non-empty, case fields, metrics total/accuracy, calculate_accuracy (perfect/partial/empty)
+  - `test_metrics.py` — 3 tests: perfect accuracy, partial accuracy, empty accuracy
+- Evaluation architecture documentation in `docs/class-diagram.md` and `docs/sequence-diagram.md`
+- Separation of concerns: production agent (`agent/agent.py`) is decoupled from evaluation logic; `EvaluationRunner` takes an `agent` argument
+
+### Changed
+
+- (no changes from previous 0.0.9 entry)
+
+### Known Issues
+
+- (no new issues from evaluation architecture)
