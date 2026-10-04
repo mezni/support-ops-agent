@@ -1,6 +1,6 @@
 # Class Diagram
 
-Static structure of `support-ops-agent` as it exists at version **0.0.8**.
+Static structure of `support-ops-agent` as it exists at version **0.0.9**.
 
 Companion to [sequence-diagram.md](sequence-diagram.md), which shows runtime ordering.
 This document shows types, members, and relationships. Implemented and unimplemented
@@ -32,9 +32,21 @@ classDiagram
         -LLMClient llm
         -ToolRegistry tools
         -MemoryManager memory
-        +decide(ticket) AgentDecision
-        +execute(ticket, decision) ToolResult or str
-        +run(ticket) ToolResult or str
+        +build_context(state) str
+        +decide(state) AgentDecision
+        +execute_decision(state, decision) None
+        +run(ticket) AgentState
+    }
+
+    class AgentState {
+        <<PydanticModel>>
+        +IncomingTicket ticket
+        +AgentStatus status
+        +int iteration
+        +int max_iterations
+        +list tool_calls
+        +str final_response
+        +str error
     }
 
     class MemoryManager {
@@ -189,6 +201,34 @@ classDiagram
         <<PydanticModel>>
         +AgentAction action
         +str reason
+        +str tool_name
+        +dict tool_arguments
+        +str response
+    }
+
+    class AgentAction {
+        <<StrEnum>>
+        SEARCH_KNOWLEDGE_BASE
+        DRAFT_RESPONSE
+        CREATE_TICKET
+        ESCALATE
+    }
+
+    class AgentStatus {
+        <<Enum>>
+        RUNNING
+        COMPLETED
+        FAILED
+        MAX_ITERATIONS
+    }
+
+    class ToolExecution {
+        <<PydanticModel>>
+        +str tool_name
+        +dict arguments
+        +bool success
+        +str result
+        +dict data
     }
 
     class TicketCategory {
@@ -216,13 +256,6 @@ classDiagram
         ESCALATED
     }
 
-    class AgentAction {
-        <<enumeration>>
-        DRAFT_RESPONSE
-        CREATE_TICKET
-        ESCALATE
-    }
-
     class FakeLLM {
         <<test double>>
         +structured(message, output_model) AgentDecision
@@ -234,6 +267,7 @@ classDiagram
     SupportAgent o-- LLMClient : llm
     SupportAgent o-- ToolRegistry : tools
     SupportAgent o-- MemoryManager : memory
+    SupportAgent o-- AgentState : produces
     MemoryManager *-- ShortTermMemory : short_term
     MemoryManager *-- LongTermMemory : long_term
     ShortTermMemory o-- ConversationMessage : _messages
@@ -252,14 +286,13 @@ classDiagram
     SearchKnowledgeBaseTool ..> SearchKnowledgeBaseInput : argument_schema
     SearchKnowledgeBaseTool ..> ToolResult : returns
     SupportAgent ..> ToolResult : create_ticket returns
+    SupportAgent ..> AgentState : run returns
     SupportAgent ..> AgentDecision : decide returns
     SupportAgent ..> IncomingTicket : consumes
     AgentDecision --> AgentAction : action
-    TicketClassification --> TicketCategory : category
-    TicketClassification --> TicketPriority : priority
-    SupportTicket --> TicketCategory : category
-    SupportTicket --> TicketPriority : priority
-    SupportTicket --> TicketStatus : status
+    AgentState --> IncomingTicket : ticket
+    AgentState --> AgentStatus : status
+    AgentState o-- ToolExecution : tool_calls
 ```
 
 `*--` is composition: the owner creates the part. `o--` is aggregation: the consumer
@@ -389,30 +422,17 @@ handle this, but `json.dumps` would emit a valid literal if that matters.
 
 ## Registered tools versus reachable tools
 
-`ToolRegistry` holds two tools, but the agent can only reach one of them:
+`ToolRegistry` holds two tools, and the agent can reach both via `execute_decision`:
 
-| Registered tool | Reachable via `execute`? | Why |
+| Registered tool | Reachable | Why |
 | --- | --- | --- |
-| `create_ticket` | Yes | `AgentAction.CREATE_TICKET` branch |
-| `search_knowledge_base` | **No** | no matching `AgentAction`, no dispatch branch |
+| `create_ticket` | Yes | `execute_decision` resolves the tool and executes it when `decision.tool_name` is provided. |
+| `search_knowledge_base` | Yes | The same path resolves and executes it; the loop feeds results back into the next decision via `build_context`. |
 
-`AgentAction` has exactly three members — `DRAFT_RESPONSE`, `CREATE_TICKET`, `ESCALATE`
-— and `SupportAgent.execute` branches only on `CREATE_TICKET` before handling the two
-placeholder actions. There is no `SEARCH_KNOWLEDGE_BASE` action, so the decision schema
-offered to the model cannot express "look this up", and `execute` has no branch that
-would call `tools.get("search_knowledge_base")`.
+`AgentAction.SEARCH_KNOWLEDGE_BASE` exists in the action enum, so the model can select
+a knowledge lookup. Results are recorded in `AgentState.tool_calls` and also in memory.
 
-The knowledge layer is therefore reachable **only from tests** and from `main`, which
-constructs the retriever and passes it into the registry. This is why the suite is green
-despite the gap: the agent test asserts on `create_ticket`.
 
-Wiring it requires two coordinated changes, not one:
-
-1. Add `AgentAction.SEARCH_KNOWLEDGE_BASE` so the model can select it.
-2. Add an `execute` branch resolving `"search_knowledge_base"` from the registry.
-
-Until then the registry and the action enum are two independent lists that can drift
-further apart with no test failing.
 
 ---
 
@@ -717,35 +737,36 @@ declare `-> AgentDecision` with no cast.
 | `knowledge/retriever.py` | `KnowledgeRetriever`, `SearchResult` | Working, naive scoring |
 | `tools/base.py` | `Tool` (ABC), `ToolResult` | Working |
 | `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
-| `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **unreachable from agent** |
+| `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, reachable via loop |
 | `tools/registry.py` | `ToolRegistry`, `create_default_registry` | Working, now requires a retriever |
 | `memory/models.py` | `ConversationMessage`, `CustomerMemory` | Working |
 | `memory/short_term.py` | `ShortTermMemory` | Working, unbounded |
 | `memory/long_term.py` | `LongTermMemory` | Working, `get` mutates |
 | `memory/manager.py` | `MemoryManager` | Working, no return type on `get_conversation` |
-| `agent/agent.py` | `decide`, `execute`, `run` | Working; 2 of 3 actions placeholders |
+| `agent/state.py` | `AgentState`, `AgentStatus`, `ToolExecution`, `ToolCall` | Working |
+| `agent/agent.py` | `build_context`, `decide`, `execute_decision`, `run` | Working loop-based agent; search_knowledge_base reachable |
 | `main.py` | module function only | Working composition root |
 | `agent/tools.py` | `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |
 | `classifier.py` | `TicketClassifier.classify` | Raises `NotImplementedError` |
-| `tests/agent/fakes.py` | `FakeLLM` | Test only |
+| `tests/agent/fakes.py` | `FakeLLM`, `ScriptedLLM` | Test only |
 
 ---
 
 ## Known gaps
 
-- **`decide` is not idempotent.** It records the ticket description to short-term
-  memory on every call, so calling it twice on one ticket stores the message twice. The
-  roadmap Phase 3 agent loop calls `decide` inside a `while`, so a loop implementation
-  would multiply entries. Recording on `run` instead, or de-duplicating by `ticket_id`,
-  would fix it.
-- **Memory context is untested.** The agent test uses `FakeLLM`, which ignores its
-  prompt, so nothing asserts that customer facts, preferences, or previous tickets
-  actually reach the model. A silent regression in prompt assembly would not fail any
-  test.
-- **`search_knowledge_base` is unreachable from the agent.** It is registered, but
-  `AgentAction` has no matching member and `execute` has no dispatch branch, so the
-  decision schema cannot express a knowledge lookup. See
-  [registered versus reachable](#registered-tools-versus-reachable-tools).
+- **`decide` is no longer called with a single ticket.** It now takes `AgentState` and
+  reads `state.ticket`, `state.iteration`, and `state.tool_calls`. This matches the loop
+  design in `run`.
+- **`decide` is idempotent in the loop.** The ticket description is recorded once in
+  `run`, not in `decide`, so repeated `decide` calls no longer duplicate it. See the
+  memory-layer notes for remaining constraints.
+- **Tool results reach the model.** `ToolExecution` carries `data`, and `build_context`
+  renders tool history and customer memory as JSON. `AgentDecision.response` holds the
+  customer-facing text for `DRAFT_RESPONSE`.
+- **`search_knowledge_base` is reachable.** `AgentAction.SEARCH_KNOWLEDGE_BASE` exists and
+  `SupportAgent.execute_decision` resolves the tool from the registry, so the loop can
+  call it and feed its results back in via `build_context`. The registry no longer drifts
+  from the action enum.
 - **`TicketClassifier.classify` is unimplemented.** It calls `llm.chat`, discards the
   result, and raises `NotImplementedError`. It should call `llm.structured` with
   `TicketClassification`, which is the pattern `SupportAgent.decide` already uses.
@@ -758,11 +779,12 @@ declare `-> AgentDecision` with no cast.
 - **Memory layer traps.** `LongTermMemory.get` inserts on read, `updated_at` does not
   track modification, and `ShortTermMemory` is unbounded. See
   [memory layer](#memory-layer).
-- **Model choice drives the demo.** `poolside/laguna-s-2.1:free` selected `escalate` for
-  every ticket tried, including unambiguous duplicate-billing cases. `main()` therefore
-  usually prints a placeholder string rather than exercising tool execution. Test
-  `execute` with an explicit `AgentDecision` to exercise dispatch independently of
-  model judgement.
+- **Model choice drives the demo.** `poolside/laguna-s-2.1:free` may choose different
+  actions under rate limiting, and `main()` prints the entire `AgentState` object. For
+  predictable behaviour, use `ScriptedLLM` or test by calling `execute_decision`
+  directly.
 - **No tool-exposure to the model.** Tools are never advertised to the LLM; the action
   enum and the tool registry are maintained separately and can drift.
-- **Unused import.** `domain/ticket.py` imports `pydantic.Field` without using it.
+- **`domain/ticket.py` cleanup.** The `AgentAction`/`AgentDecision` definitions were
+  deduplicated; state types now live in `agent/state.py`. Any stale imports should be
+  removed if they surface.

@@ -1,6 +1,6 @@
 # Sequence Diagrams
 
-Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.8**.
+Diagrams of the `support-ops-agent` runtime as it exists at version **0.0.9**.
 
 These describe **implemented** behaviour, not the target architecture in
 [roadmap.md](roadmap.md). Where a code path raises `NotImplementedError`, that is shown
@@ -125,20 +125,17 @@ does not constrain `poolside/laguna-s-2.1:free`, which otherwise replies with Ma
 prose such as `**Chosen action:** escalate` and causes `ValidationError: Invalid JSON`.
 The customer-context sections were added to the prompt without disturbing that contract.
 
-**The `search_knowledge_base` tool is never reached.** The registry holds it, but
-`AgentAction` has only `draft_response`, `create_ticket`, and `escalate`, so the model
-cannot select knowledge search and `execute` has no branch for it. The knowledge base
-therefore cannot influence the decision, even though `main` builds and injects the whole
-retrieval stack. The fourth branch above is unreachable: a model that did emit
-`"action": "search_knowledge_base"` would fail pydantic validation at `decide`, not at
-dispatch.
+**The `search_knowledge_base` tool is reachable.** `AgentAction` includes
+`SEARCH_KNOWLEDGE_BASE`, and `execute_decision` resolves and runs it from the registry.
+The model can select knowledge search; results are recorded in `AgentState.tool_calls`
+and passed back to the next decision via `build_context`.
 
 ---
 
 ## 3. Memory-augmented decision
 
 Detail of `SupportAgent.decide`, which both reads and writes memory. This matters
-because `decide` is **not idempotent**: the write happens on every call.
+The ticket description is recorded once in `run` (before the loop), so repeated `decide` calls no longer duplicate it.
 
 ```mermaid
 sequenceDiagram
@@ -149,9 +146,7 @@ sequenceDiagram
     participant Long as LongTermMemory
     participant LLMClient as LLMClient
 
-    Agent->>Manager: remember_message role user and ticket description
-    Manager->>Short: add role and content
-    Short-->>Manager: ConversationMessage appended, no eviction
+    Note over Agent,Manager: In 0.0.9 the write happens once in `run`, not in `decide`; see section 2
     Agent->>Manager: get_customer ticket.customer_id
     Manager->>Long: get customer_id
     alt first time this customer is seen
@@ -167,12 +162,8 @@ sequenceDiagram
 
 Two consequences of doing the write inside `decide`:
 
-1. **Repeated calls duplicate messages.** Calling `decide` twice on one ticket stores
-   the description twice, because nothing de-duplicates on `ticket_id`. The roadmap
-   Phase 3 agent loop calls `decide` inside a `while`, so a loop implementation would
-   multiply entries.
-2. **Short-term memory is never bounded.** No eviction is applied, so the buffer grows
-   with every call. Roadmap Phase 6 specifies "Last 5 exchanges".
+1. **Memory is never bounded.** `ShortTermMemory` has no eviction and no maximum length,
+   so the buffer grows with recorded messages. Roadmap Phase 6 specifies "Last 5 exchanges".
 
 The interpolated context appears in the prompt as Python `repr`, not JSON:
 
@@ -349,7 +340,7 @@ fix belonged in the prompt rather than in the transport.
 | `knowledge/retriever.py` | Token-overlap search | Working, naive scoring |
 | `tools/base.py` | `Tool` ABC and `ToolResult` | Working |
 | `tools/create_ticket.py` | `CreateTicketInput`, `CreateTicketTool` | Working, stubbed persistence |
-| `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **unreachable from agent** |
+| `tools/search_knowledge_base.py` | `SearchKnowledgeBaseInput`, `SearchKnowledgeBaseTool` | Working, **reachable** |
 | `tools/registry.py` | `ToolRegistry` and default factory | Working |
 | `agent/agent.py` | `decide`, `execute`, `run`; reads and writes memory | Working; 2 of 3 actions placeholders |
 | `agent/tools.py` | Legacy `ToolResult`, `create_ticket` | **Dead code**, superseded by `tools/` |

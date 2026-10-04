@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class TicketCategory(StrEnum):
@@ -52,6 +52,7 @@ class TicketClassification(BaseModel):
 
 
 class AgentAction(StrEnum):
+    SEARCH_KNOWLEDGE_BASE = "search_knowledge_base"
     DRAFT_RESPONSE = "draft_response"
     CREATE_TICKET = "create_ticket"
     ESCALATE = "escalate"
@@ -60,3 +61,8 @@ class AgentAction(StrEnum):
 class AgentDecision(BaseModel):
     action: AgentAction
     reason: str
+
+    tool_name: str | None = None
+    tool_arguments: dict = {}
+
+    response: str | None = None
