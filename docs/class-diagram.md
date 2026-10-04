@@ -826,6 +826,40 @@ declare `-> AgentDecision` with no cast.
 
 ## Evaluation Architecture
 
+## Persistence Architecture (0.0.9)
+
+- **`persistence/` package** (new in 0.0.9):
+  - `database.py` — `Database` class with `connect()` method, creates `data/support_ops.db`
+  - `models.py` — `SCHEMA` SQL schema and `initialize_database()` function
+  - `repositories/__init__.py` — `CustomerMemoryRepository`, `TicketRepository`, `TraceRepository`
+  - `repositories/customer_memory.py` — `CustomerMemoryRepository` with `save()`/`get()` using JSON-in-TEXT
+  - `repositories/tickets.py` — `TicketRepository` with `add_customer_ticket()`/`get_customer_tickets()`
+  - `repositories/traces.py` — `TraceRepository` with `save()`/`get_run()` for observability events
+
+- **Database schema** (`SCHEMA`): defines `customer_memory`, `customer_tickets`, and `traces` tables using SQLite.
+
+- **Repository pattern** enables swapping database backends without changing agent code:
+  - `CustomerMemoryRepository` → `SQLite`, `PostgreSQL`, or another database
+  - `TicketRepository` → same interchangeability
+  - `TraceRepository` → same interchangeability
+
+- **Persistence vs. Memory**: SQLite is merely a storage mechanism; Memory is the semantic concept:
+  Long-term Memory → CustomerMemoryRepository → SQLite.
+  The agent depends on the `CustomerMemoryRepository` abstraction, not the concrete database.
+  Later, the repository can be replaced without changing the agent.
+
+- **`Tracer` optional persistence** (0.0.9): `Tracer(repository=None)` for tests, `Tracer(repository=TraceRepository(Database()))` for production.
+  The agent itself has no knowledge of SQLite or any concrete database — this is an important
+  dependency inversion boundary.
+
+- **`data/support_ops.db`** is created on first run via `initialize_database(Database())`.
+
+- **Persistence is not the same as memory**: SQLite is the storage mechanism; Memory is the
+  semantic concept. Later database swaps don't change the memory semantic model.
+
+
+
+
 - **`evaluation/` package** (new in 0.0.9):
   - `cases.py` — `EvaluationCase` dataclass and golden dataset of 4 tickets
   - `metrics.py` — `EvaluationMetrics` dataclass with `accuracy` property

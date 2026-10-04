@@ -447,3 +447,29 @@ This release adds the evaluation architecture for regression testing agent behav
 ### Known Issues
 
 - (no new issues from evaluation architecture)
+
+
+
+### Added (persistence architecture)
+
+- `support_ops/persistence/` package:
+  - `__init__.py` — exports `CustomerMemoryRepository`, `TicketRepository`, `TraceRepository`
+  - `database.py` — `Database` class with `connect()` method, creates `data/support_ops.db`
+  - `models.py` — `SCHEMA` SQL schema and `initialize_database()` function
+  - `repositories/__init__.py` — `CustomerMemoryRepository`, `TicketRepository`, `TraceRepository`
+  - `repositories/customer_memory.py` — `CustomerMemoryRepository` with `save()`/`get()` using JSON-in-TEXT
+  - `repositories/tickets.py` — `TicketRepository` with `add_customer_ticket()`/`get_customer_tickets()`
+  - `repositories/traces.py` — `TraceRepository` with `save()`/`get_run()` for observability events
+- `tests/persistence/` package:
+  - `test_customer_memory.py` — persistence test using temp database
+- Persistence architecture documentation in `docs/class-diagram.md` and `docs/sequence-diagram.md`
+- Separation of concerns: production agent (`agent/agent.py`) is decoupled from persistence logic; `Repository` classes take a `Database` argument
+- `data/support_ops.db` is created on first run via `initialize_database(Database())`
+
+### Changed
+
+- (no changes from previous 0.0.9 entry)
+
+### Known Issues
+
+- (no new issues from persistence architecture)

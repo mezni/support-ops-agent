@@ -364,6 +364,69 @@ fix belonged in the prompt rather than in the transport.
   nothing populates long-term facts or previous tickets automatically.
 ## 0.0.9 Evaluation Architecture
 
+## 0.0.9 Persistence Architecture
+
+Persistence Architecture
+    │
+    ▼
+  Database (SQLite: data/support_ops.db)
+    │
+    ▼
+  Repository Layer
+    │
+    ▼
+  Customer Memory
+    │
+    ▼
+  Ticket Relationships
+    │
+    ▼
+  Traces (Observability)
+    │
+    ▼
+  Agent Runtime (unchanged)
+
+The persistence layer uses SQLite as the storage backend, with a Repository pattern
+that enables swapping database backends without changing the agent.
+
+Component reference updates:
+- `persistence/database.py` — `Database` with `connect()` method
+- `persistence/models.py` — `SCHEMA` SQL schema + `initialize_database()`
+- `persistence/repositories/__init__.py` — `CustomerMemoryRepository`, `TicketRepository`, `TraceRepository`
+- `persistence/repositories/customer_memory.py` — `CustomerMemoryRepository` with `save()`/`get()`
+- `persistence/repositories/tickets.py` — `TicketRepository` with `add_customer_ticket()`/`get_customer_tickets()`
+- `persistence/repositories/traces.py` — `TraceRepository` with `save()`/`get_run()`
+- `data/support_ops.db` — created on first run via `initialize_database(Database())`
+
+Evaluation should be separate from production logic:
+- Agent runtime lives in `agent/agent.py`
+- Persistence layer is standalone, takes a `Database` argument
+- Production code should not import from `tests/persistence/`
+
+The persistence architecture complements the evaluation architecture (0.0.9):
+- Evaluation provides regression testing
+- Persistence provides durability across restarts
+- Together they enable production-grade agent development
+
+1. Build agent
+2. Run evaluation dataset
+3. Measure results
+4. Find failures
+5. Change prompt/tool/policy
+6. Rerun and compare
+7. Keep or reject change
+
+The evaluation and persistence architectures are complementary and both
+are Phase 12 additions.
+
+Sequence dependency:
+Evaluation Dataset → Agent Run → Agent Output → Evaluator → Metrics → Report
+         │                              │
+         └──────Persistence───────────┘
+
+
+
+
 Evaluation Dataset
     │
     ▼
